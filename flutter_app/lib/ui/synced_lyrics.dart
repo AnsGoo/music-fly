@@ -146,7 +146,7 @@ LyricPreset _preset({required bool dense}) {
     // The sung portion stays cream so the active line reads as one bright
     // block, the way the web player renders it.
     highlight: const LyricHighlight.solid(Mf.text, tailFadeWidth: 14),
-    countdown: base.countdown.copyWith(color: Mf.faint),
+    countdown: base.countdown.copyWith(color: Mf.muted),
     edgeFade: LyricEdgeFade.fraction(top: dense ? .14 : .16, bottom: .18),
     lineSpacing: dense ? 18 : 26,
     padding: EdgeInsets.symmetric(horizontal: dense ? 22 : 6),

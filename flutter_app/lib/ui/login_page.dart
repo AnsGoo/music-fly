@@ -129,29 +129,34 @@ class _LoginPageState extends State<LoginPage> {
     Widget tab(_LoginMode mode, String label) {
       final selected = _mode == mode;
       return Expanded(
-        child: GestureDetector(
-          onTap: () {
-            if (_mode == mode) return;
-            setState(() => _mode = mode);
-            // Errors belong to one flow; switching flows clears them.
-            context.read<AppModel>().consumeError();
-          },
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            curve: Curves.easeOutCubic,
-            height: 34,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: selected ? Mf.raised : Colors.transparent,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: selected ? Mf.accent : Colors.transparent),
-            ),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: selected ? Mf.text : Mf.faint,
-                fontSize: 12.5,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+        child: Semantics(
+          button: true,
+          selected: selected,
+          label: label,
+          child: GestureDetector(
+            onTap: () {
+              if (_mode == mode) return;
+              setState(() => _mode = mode);
+              // Errors belong to one flow; switching flows clears them.
+              context.read<AppModel>().consumeError();
+            },
+            child: AnimatedContainer(
+              duration: MfMotion.of(context, MfMotion.quick),
+              curve: MfMotion.enter,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected ? Mf.raised : Mf.transparent,
+                borderRadius: BorderRadius.circular(MfRadius.sm),
+                border: Border.all(color: selected ? Mf.accent : Mf.transparent),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: selected ? Mf.text : Mf.muted,
+                  fontSize: MfType.body,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                ),
               ),
             ),
           ),
@@ -164,7 +169,7 @@ class _LoginPageState extends State<LoginPage> {
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         color: Mf.surfaceAlt,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(MfRadius.md),
       ),
       child: Row(
         children: [
@@ -247,8 +252,8 @@ class _LoginPageState extends State<LoginPage> {
                                 '需要 Music Free 服务端 · 兼容 Navidrome / Subsonic',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  color: Mf.faint,
-                                  fontSize: 11.5,
+                                  color: Mf.muted,
+                                  fontSize: MfType.label,
                                 ),
                               ),
                             ],
@@ -272,7 +277,7 @@ class _LoginPageState extends State<LoginPage> {
                         const Text(
                           '需要 Music Free 服务端 · 兼容 Navidrome / Subsonic',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: Mf.faint, fontSize: 11.5),
+                          style: TextStyle(color: Mf.muted, fontSize: MfType.label),
                         ),
                       ],
                     ),
@@ -362,7 +367,7 @@ class _LoginPageState extends State<LoginPage> {
                 : '第一步 · 输入 FNID，优先直连内网 / 公网',
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(color: Mf.muted, fontSize: 11.5, height: 1.4),
+        style: const TextStyle(color: Mf.muted, fontSize: MfType.label, height: 1.4),
       ),
       const SizedBox(height: 10),
       MfField(
@@ -374,27 +379,32 @@ class _LoginPageState extends State<LoginPage> {
       ),
       if (!needsNas) ...[
         const SizedBox(height: 10),
-        GestureDetector(
-          onTap: () => setState(() => _fnRemoteExpanded = !_fnRemoteExpanded),
-          child: Row(
-            children: [
-              Icon(
-                _fnRemoteExpanded ? Icons.expand_less : Icons.expand_more,
-                size: 14,
-                color: Mf.faint,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  _rememberedNasUser != null
-                      ? '外网自动切换 · 已记住 $_rememberedNasUser'
-                      : '外网自动切换（可选）· 登记飞牛账号，离开内网自动切换',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Mf.muted, fontSize: 11),
+        Semantics(
+          button: true,
+          expanded: _fnRemoteExpanded,
+          label: '外网自动切换设置',
+          child: GestureDetector(
+            onTap: () => setState(() => _fnRemoteExpanded = !_fnRemoteExpanded),
+            child: Row(
+              children: [
+                Icon(
+                  _fnRemoteExpanded ? Icons.expand_less : Icons.expand_more,
+                  size: 14,
+                  color: Mf.muted,
                 ),
-              ),
-            ],
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _rememberedNasUser != null
+                        ? '外网自动切换 · 已记住 $_rememberedNasUser'
+                        : '外网自动切换（可选）· 登记飞牛账号，离开内网自动切换',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ],
@@ -459,17 +469,25 @@ class _LoginPageState extends State<LoginPage> {
                 '已连接 · $links 条可达链路，${model.fnAddressCount} 条备用',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Mf.muted, fontSize: 11.5),
+                style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
               ),
             ),
           ] else
             const Spacer(),
           const SizedBox(width: 8),
-          GestureDetector(
-            onTap: model.resetFnConnect,
-            child: const Text(
-              '重新连接',
-              style: TextStyle(color: Mf.accent, fontSize: 11.5),
+          Semantics(
+            button: true,
+            label: '重新连接服务器',
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: model.resetFnConnect,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  '重新连接',
+                  style: TextStyle(color: Mf.accent, fontSize: MfType.label),
+                ),
+              ),
             ),
           ),
         ],
@@ -479,7 +497,7 @@ class _LoginPageState extends State<LoginPage> {
         '第二步 · 输入 Music Free 账号密码，可更换登录账号',
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(color: Mf.muted, fontSize: 11.5, height: 1.4),
+        style: const TextStyle(color: Mf.muted, fontSize: MfType.label, height: 1.4),
       ),
       const SizedBox(height: 10),
       _credentialsFields(submit),
@@ -510,7 +528,7 @@ class _StatusBanner extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
         color: Mf.accentWash,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(MfRadius.sm),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -572,8 +590,8 @@ class _BrandTexts extends StatelessWidget {
           'MUSICFLY',
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: Mf.faint,
-            fontSize: 10.5,
+            color: Mf.muted,
+            fontSize: MfType.label,
             fontWeight: FontWeight.w600,
             letterSpacing: 2.6,
           ),

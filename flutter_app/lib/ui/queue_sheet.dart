@@ -64,7 +64,7 @@ Future<void> showQueueSheet(BuildContext context) async {
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    barrierColor: const Color(0xB3000000),
+    barrierColor: Mf.scrim,
     builder: (_) => const QueueSheet(),
   );
 }
@@ -144,7 +144,9 @@ class _QueueSheetState extends State<QueueSheet> {
             child: DecoratedBox(
               decoration: const BoxDecoration(
                 color: Mf.bg,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+                borderRadius: BorderRadius.vertical(
+                  top: Radius.circular(MfRadius.sheet),
+                ),
               ),
               child: body,
             ),
@@ -175,6 +177,7 @@ class _QueueSheetState extends State<QueueSheet> {
             size: 30,
             glyph: 18,
             tooltip: '关闭播放队列',
+            expandHitTarget: isMobilePlatform,
             onTap: () => context.read<AppModel>().closeQueuePanel(),
           ),
         ],
@@ -215,6 +218,7 @@ class _QueueSheetState extends State<QueueSheet> {
           size: 30,
           glyph: 18,
           tooltip: '回到当前',
+          expandHitTarget: isMobilePlatform,
           onTap: _scrollToCurrent,
         ),
         MfIconButton(
@@ -222,6 +226,7 @@ class _QueueSheetState extends State<QueueSheet> {
           size: 30,
           glyph: 18,
           tooltip: _tab == QueueTab.current ? '清空播放列表' : '清空历史',
+          expandHitTarget: isMobilePlatform,
           onTap: () {
             if (_tab == QueueTab.current) {
               model.clearQueue();
@@ -240,29 +245,34 @@ class _QueueSheetState extends State<QueueSheet> {
     required bool selected,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: selected ? Mf.text : Mf.muted,
-              fontSize: 17,
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-            ),
-          ),
-          if (count != null && count > 0)
-            Padding(
-              padding: const EdgeInsets.only(left: 3, top: 2),
-              child: Text(
-                '$count',
-                style: const TextStyle(color: Mf.muted, fontSize: 10.5),
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? Mf.text : Mf.muted,
+                fontSize: 17,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
-        ],
+            if (count != null && count > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 3, top: 2),
+                child: Text(
+                  '$count',
+                  style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -289,6 +299,8 @@ class _QueueSheetState extends State<QueueSheet> {
       return Center(
         child: Text(
           history ? '还没有播放记录' : '播放列表是空的',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(color: Mf.muted, fontSize: 13),
         ),
       );
@@ -376,7 +388,7 @@ class _QueueSheetState extends State<QueueSheet> {
                           color: active
                               ? Mf.accent.withValues(alpha: 0.85)
                               : Mf.muted,
-                          fontSize: 12.5,
+                          fontSize: MfType.body,
                         ),
                       ),
                     ],
@@ -393,16 +405,21 @@ class _QueueSheetState extends State<QueueSheet> {
               size: 30,
               glyph: 16,
               tooltip: '从列表移除',
+              expandHitTarget: isMobilePlatform,
               onTap: () => model.removeFromQueue(index),
             ),
-            ReorderableDragStartListener(
-              index: index,
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 18),
-                child: Icon(
-                  Icons.drag_handle_rounded,
-                  size: 18,
-                  color: Mf.muted,
+            Semantics(
+              button: true,
+              label: '拖动排序',
+              child: ReorderableDragStartListener(
+                index: index,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 18),
+                  child: Icon(
+                    Icons.drag_handle_rounded,
+                    size: 18,
+                    color: Mf.muted,
+                  ),
                 ),
               ),
             ),
@@ -419,7 +436,7 @@ class _QueueSheetState extends State<QueueSheet> {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0x00131010), Mf.bg, Mf.bg],
+          colors: [Mf.transparent, Mf.bg, Mf.bg],
           stops: [0, 0.38, 1],
         ),
       ),
@@ -454,8 +471,8 @@ class _QueueSheetState extends State<QueueSheet> {
       final target = (index * _rowHeight - 120).clamp(0.0, max).toDouble();
       _scroll.animateTo(
         target,
-        duration: const Duration(milliseconds: 280),
-        curve: Curves.easeOutCubic,
+        duration: MfMotion.of(context, MfMotion.slow),
+        curve: MfMotion.enter,
       );
     });
   }
@@ -484,37 +501,41 @@ class _Pill extends StatelessWidget {
   Widget build(BuildContext context) {
     return Tooltip(
       message: tooltip,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: SizedBox(
-          height: 38,
-          child: Center(
-            child: Container(
-              key: ValueKey('queue-pill-$label'),
-              height: 30,
-              padding: const EdgeInsets.symmetric(horizontal: 11),
-              decoration: BoxDecoration(
-                color: Mf.surface.withValues(alpha: 0.92),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Mf.border),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, size: 15, color: Mf.muted),
-                  const SizedBox(width: 6),
-                  Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Mf.textSoft,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+      child: Semantics(
+        button: true,
+        label: label,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: SizedBox(
+            height: 38,
+            child: Center(
+              child: Container(
+                key: ValueKey('queue-pill-$label'),
+                height: 30,
+                padding: const EdgeInsets.symmetric(horizontal: 11),
+                decoration: BoxDecoration(
+                  color: Mf.surface.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Mf.border),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: 15, color: Mf.muted),
+                    const SizedBox(width: 6),
+                    Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Mf.textSoft,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

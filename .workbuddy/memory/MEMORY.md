@@ -44,6 +44,9 @@
 - `reorderQueue` 按 ReorderableListView 旧 `onReorder` 的**插入索引**语义（newIndex > oldIndex 时 -1）；不要换成新版 `onReorderItem`（它会预先调整 newIndex，会整体错位，且 macOS 上 Flutter SDK 可能较旧）。代码里带 `// ignore: deprecated_member_use`。
 - 移动端竖屏（宽 < 560）全屏播放器底部按钮分主/次两行：主行 5 个（播放模式/上一首/播放/下一首/队列），次级行 4 个（收藏/歌曲信息/音量/投屏）；桌面仍单行 + 音量 slider。迷你播放条是悬浮圆角卡片，只留「播放 + 播放列表」两个按钮，上一首/收藏/投屏已迁到全屏播放器。
 - **竖屏唱片尺寸不能按 `maxHeight` 的固定比例硬算**（2026-11-13 修溢出）：`now_playing.dart` 窄屏分支必须是 `Expanded(LayoutBuilder(唱片)) + 固定高度 _credits(...)`，唱片 = `min(宽度×0.78, 剩余高度-4, 300)`；比例硬算（旧 0.72）会让歌名/歌手/专辑三行把 Column 撑出 `BOTTOM OVERFLOWED BY ... PIXELS`。封面:歌词 flex 为 6:4，歌词区可用高度 < 140 时隐藏歌词面板（空状态有最小高度）。`test/now_playing_test.dart` 有多尺寸 `takeException() == null` 回归。
+- **设计 token 体系（2026-11-15 UI UX Pro Max 技能）**：所有颜色必须走 `lib/ui/theme.dart` 的 `Mf.*`；文字只用 `Mf.text` / `textSoft` / `muted`（均 ≥4.5:1），`Mf.faint` 只作装饰、`Mf.disabled` 只作禁用态，绝不用它们写文字；字号走 `MfType`、圆角走 `MfRadius`、间距走 `MfSpace`、动效走 `MfMotion`（`MfMotion.of(context, d)` 自带 reduced-motion 归零）；移动端点击区用 `expandHitTarget: isMobilePlatform`（默认 false，桌面 34dp 视觉尺寸不变）。主题已补全 M3 ColorScheme 角色与 textTheme 层级，`error` 与 `accent` 分离。`test/ui_theme_test.dart` 有对比度与 token 纪律回归，别绕开。技能已装在 `~/.workbuddy/skills/ui-ux-pro-max/`。
+- **用户偏好（2026-11-15 确认）**：样式优化保留暖黑 + 朱红品牌色，不采用技能推荐的深蓝/绿色方案；触控区只放大移动端，桌面 34dp 纯图标按钮不变。
+- **首页「查看全部」必须右对齐**（2026-11-15 用户反馈跑到页面中央）：`home_view.dart` `_SectionCard` header 用「左侧 `Expanded` 独占剩余宽度 + 行尾固定按钮」，不要用 `Spacer()` 与多个 flex 混排（会均分空间仍居中）；`test/home_header_align_test.dart` 锁定。
 
 ## 遗留事项
 

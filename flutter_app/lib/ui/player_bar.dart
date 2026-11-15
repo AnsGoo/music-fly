@@ -31,18 +31,22 @@ class _PlayerBarState extends State<PlayerBar>
   /// it is initialised (`LateInitializationError`). Rebound on dependency
   /// change and on reassemble instead.
   ValueNotifier<PlaybackState>? _playback;
+  bool _reducedMotion = false;
 
   /// The cover turns like a record while audio advances, mirroring the web
-  /// transport. It keeps its angle when paused.
+  /// transport. It keeps its angle when paused, and stays still when the OS
+  /// asks for reduced motion.
   late final AnimationController _spin = AnimationController(
     vsync: this,
-    duration: const Duration(seconds: 26),
+    duration: MfMotion.vinyl,
   );
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _reducedMotion = MfMotion.reduced(context);
     _bindPlayback(context.read<AppModel>().playback);
+    _syncSpin();
   }
 
   @override
@@ -50,6 +54,7 @@ class _PlayerBarState extends State<PlayerBar>
     super.reassemble();
     // Hot reload: reattach to the (possibly recreated) model's notifier.
     _bindPlayback(context.read<AppModel>().playback);
+    _syncSpin();
   }
 
   void _bindPlayback(ValueNotifier<PlaybackState> notifier) {
@@ -68,7 +73,7 @@ class _PlayerBarState extends State<PlayerBar>
   }
 
   void _syncSpin() {
-    final playing = _playback?.value.playing ?? false;
+    final playing = (_playback?.value.playing ?? false) && !_reducedMotion;
     if (playing && !_spin.isAnimating) {
       _spin.repeat();
     } else if (!playing && _spin.isAnimating) {
@@ -200,8 +205,8 @@ class _PlayerBarState extends State<PlayerBar>
                       formatClock(position),
                       textAlign: TextAlign.right,
                       style: const TextStyle(
-                        color: Mf.faint,
-                        fontSize: 11,
+                        color: Mf.muted,
+                        fontSize: MfType.label,
                         fontFeatures: [FontFeature.tabularFigures()],
                       ),
                     ),
@@ -216,8 +221,8 @@ class _PlayerBarState extends State<PlayerBar>
                     child: Text(
                       formatClock(durationSeconds),
                       style: const TextStyle(
-                        color: Mf.faint,
-                        fontSize: 11,
+                        color: Mf.muted,
+                        fontSize: MfType.label,
                         fontFeatures: [FontFeature.tabularFigures()],
                       ),
                     ),
@@ -254,12 +259,13 @@ class _PlayerBarState extends State<PlayerBar>
                     const Icon(
                       Icons.volume_up_rounded,
                       size: 16,
-                      color: Mf.faint,
+                      color: Mf.muted,
                     ),
                     const SizedBox(width: 8),
                     SizedBox(
                       width: 96,
                       child: MfScrubber(
+                        label: '音量',
                         fraction: model.volume,
                         thumbColor: Mf.textSoft,
                         activeColor: Mf.muted,
@@ -326,6 +332,7 @@ class _PlayerBarState extends State<PlayerBar>
                 size: 34,
                 glyph: 21,
                 tooltip: '播放列表',
+                expandHitTarget: isMobilePlatform,
                 onTap: () => showQueue(context),
               ),
             ],
@@ -349,6 +356,7 @@ class _PlayerBarState extends State<PlayerBar>
   /// Shared by both layouts: dragging previews a position, releasing seeks.
   Widget _scrubber(AppModel model, double position, double durationSeconds) {
     return MfScrubber(
+      label: '播放进度',
       fraction: durationSeconds > 0
           ? (position / durationSeconds).clamp(0.0, 1.0)
           : 0,
@@ -371,37 +379,42 @@ class _PlayerBarState extends State<PlayerBar>
       children: [
         Tooltip(
           message: '查看播放详情',
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: model.openNowPlaying,
-              child: SizedBox(
-                width: coverSize,
-                height: coverSize,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    RotationTransition(
-                      turns: _spin,
-                      child: CoverImage(
-                        url: coverUrl,
-                        size: coverSize,
-                        circular: true,
-                        iconSize: coverSize * 0.42,
-                      ),
-                    ),
-                    IgnorePointer(
-                      child: Container(
-                        width: coverSize * 0.14,
-                        height: coverSize * 0.14,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Mf.bg,
-                          border: Border.all(color: Mf.border, width: 1),
+          child: Semantics(
+            button: true,
+            label: '查看播放详情：${audio.title}',
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: model.openNowPlaying,
+                child: SizedBox(
+                  width: coverSize,
+                  height: coverSize,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      RotationTransition(
+                        turns: _spin,
+                        child: CoverImage(
+                          url: coverUrl,
+                          size: coverSize,
+                          circular: true,
+                          iconSize: coverSize * 0.42,
                         ),
                       ),
-                    ),
-                  ],
+                      IgnorePointer(
+                        child: Container(
+                          width: coverSize * 0.14,
+                          height: coverSize * 0.14,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Mf.bg,
+                            border: Border.all(color: Mf.border, width: 1),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -433,7 +446,7 @@ class _PlayerBarState extends State<PlayerBar>
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: audio.error != null ? Mf.accent : Mf.muted,
-                  fontSize: 11.5,
+                  fontSize: MfType.label,
                 ),
               ),
             ],
@@ -446,6 +459,7 @@ class _PlayerBarState extends State<PlayerBar>
   Widget _playButton(AppModel model, PlaybackState audio) => MfPlayButton(
     playing: audio.playing,
     tooltip: audio.playing ? '暂停' : '播放',
+    expandHitTarget: isMobilePlatform,
     onTap: model.togglePlay,
   );
 }
@@ -493,7 +507,7 @@ class _InlineLyric extends StatelessWidget {
         : -1;
     final text = index < 0 ? null : lyrics!.lines[index].text;
     return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 240),
+      duration: MfMotion.of(context, MfMotion.normal),
       child: text == null
           ? const SizedBox.shrink()
           : Text(
@@ -502,7 +516,7 @@ class _InlineLyric extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Mf.muted, fontSize: 11.5),
+              style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
             ),
     );
   }

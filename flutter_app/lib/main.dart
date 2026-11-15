@@ -109,9 +109,9 @@ class _SplashOverlayState extends State<_SplashOverlay>
     with TickerProviderStateMixin {
   /// Keep the mark on screen long enough to register the tagline even when
   /// the session restores instantly.
-  static const _minVisible = Duration(milliseconds: 1200);
-  static const _spinPeriod = Duration(milliseconds: 1800);
-  static const _exitDuration = Duration(milliseconds: 600);
+  static const _minVisible = MfMotion.splashMin;
+  static const _spinPeriod = MfMotion.spin;
+  static const _exitDuration = MfMotion.reveal;
 
   final DateTime _startedAt = DateTime.now();
   // Saved at initState: looking the model up via `context.read` is unsafe
@@ -125,11 +125,26 @@ class _SplashOverlayState extends State<_SplashOverlay>
   void initState() {
     super.initState();
     _model = context.read<AppModel>();
-    _spin = AnimationController(vsync: this, duration: _spinPeriod)..repeat();
+    _spin = AnimationController(vsync: this, duration: _spinPeriod);
     _exit = AnimationController(vsync: this, duration: _exitDuration);
     _model.addListener(_onModelChanged);
     // Booting may already be over by the time this overlay mounts.
     _beginExitWhenReady(_model.booting);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // "Reduce motion" users get a still mark and an instant reveal. The
+    // controller is deliberately not started in initState: MediaQuery is only
+    // safe to read here.
+    final reduced = MfMotion.reduced(context);
+    _exit.duration = reduced ? Duration.zero : _exitDuration;
+    if (reduced) {
+      if (_spin.isAnimating) _spin.stop();
+    } else if (!_spin.isAnimating && !_exiting) {
+      _spin.repeat();
+    }
   }
 
   @override
@@ -172,7 +187,7 @@ class _SplashOverlayState extends State<_SplashOverlay>
         builder: (context, _) {
           // 0 → 1 as the mark leaves: slide from centre past the top edge
           // while fading out.
-          final t = Curves.easeInCubic.transform(_exit.value);
+          final t = MfMotion.exit.transform(_exit.value);
           final travel = height / 2 + 44;
           return ColoredBox(
             color: Mf.bg,
@@ -201,7 +216,7 @@ class _SplashOverlayState extends State<_SplashOverlay>
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Mf.textSoft,
-                          fontSize: 13,
+                          fontSize: MfType.body,
                           letterSpacing: 3,
                           height: 1.2,
                           fontWeight: FontWeight.w500,

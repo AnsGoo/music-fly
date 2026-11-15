@@ -1,6 +1,8 @@
 /// The signed-in shell: navigation rail, library pane, transport and lyrics.
 library;
 
+import 'dart:math' show min;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -76,45 +78,47 @@ class _HomeShellState extends State<HomeShell> {
     // letting it take a full-height column would squeeze the desktop player
     // bar down to ~390px and overflow its fixed-width control row.
     final panelWidth = (constraints.maxWidth * 0.28).clamp(300.0, 360.0);
-    return Row(
-      children: [
-        _Sidebar(model: model),
-        const VerticalDivider(width: 1, thickness: 1, color: Mf.border),
-        Expanded(
-          child: Column(
-            children: [
-              Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: Stack(
-                        children: [
-                          const Positioned.fill(child: BrowseView()),
-                          if (model.lyricsVisible)
-                            const Positioned.fill(child: LyricsPanel()),
-                        ],
+    return SafeArea(
+      child: Row(
+        children: [
+          _Sidebar(model: model),
+          const VerticalDivider(width: 1, thickness: 1, color: Mf.border),
+          Expanded(
+            child: Column(
+              children: [
+                Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: Stack(
+                          children: [
+                            const Positioned.fill(child: BrowseView()),
+                            if (model.lyricsVisible)
+                              const Positioned.fill(child: LyricsPanel()),
+                          ],
+                        ),
                       ),
-                    ),
-                    if (model.queuePanelVisible) ...[
-                      const VerticalDivider(
-                        width: 1,
-                        thickness: 1,
-                        color: Mf.border,
-                      ),
-                      SizedBox(
-                        width: panelWidth,
-                        child: const QueueSheet(docked: true),
-                      ),
+                      if (model.queuePanelVisible) ...[
+                        const VerticalDivider(
+                          width: 1,
+                          thickness: 1,
+                          color: Mf.border,
+                        ),
+                        SizedBox(
+                          width: panelWidth,
+                          child: const QueueSheet(docked: true),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-              PlayerBar(wide: true),
-            ],
+                PlayerBar(wide: true),
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -152,7 +156,7 @@ class _MobileDrawer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Drawer(
-      width: 292,
+      width: min(292.0, MediaQuery.sizeOf(context).width - 56),
       backgroundColor: Mf.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.horizontal(right: Radius.circular(14)),
@@ -282,7 +286,7 @@ class _Sidebar extends StatelessWidget {
                       const Icon(
                         Icons.chevron_right_rounded,
                         size: 17,
-                        color: Mf.faint,
+                        color: Mf.muted,
                       ),
                     ],
                   ),
@@ -328,7 +332,7 @@ class AvatarLetter extends StatelessWidget {
       child: Text(
         letter,
         style: const TextStyle(
-          color: Colors.white,
+          color: Mf.cream,
           fontSize: 13,
           fontWeight: FontWeight.w600,
           height: 1,
@@ -372,44 +376,47 @@ class _NavItemState extends State<_NavItem> {
   Widget build(BuildContext context) {
     final selected = widget.selected;
     final color = selected ? Mf.accent : (_hovered ? Mf.text : Mf.muted);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: Container(
-          margin: EdgeInsets.only(bottom: widget.roomy ? 6 : 3),
-          padding: EdgeInsets.symmetric(
-            horizontal: 10,
-            vertical: widget.roomy ? 14 : 9,
-          ),
-          decoration: BoxDecoration(
-            color: selected
-                ? Mf.accentWash
-                : (_hovered
-                      ? Mf.raised.withValues(alpha: 0.6)
-                      : Colors.transparent),
-            borderRadius: BorderRadius.circular(7),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                _sectionIcon(widget.section),
-                size: widget.roomy ? 20 : 17,
-                color: color,
-              ),
-              SizedBox(width: widget.roomy ? 14 : 10),
-              Text(
-                widget.section.label,
-                style: TextStyle(
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: widget.section.label,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: Container(
+            margin: EdgeInsets.only(bottom: widget.roomy ? 6 : 3),
+            padding: EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: widget.roomy ? 14 : 9,
+            ),
+            decoration: BoxDecoration(
+              color: selected
+                  ? Mf.accentWash
+                  : (_hovered ? Mf.rowHoverSoft : Mf.transparent),
+              borderRadius: BorderRadius.circular(7),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _sectionIcon(widget.section),
+                  size: widget.roomy ? 20 : 17,
                   color: color,
-                  fontSize: widget.roomy ? 15 : 13,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                 ),
-              ),
-            ],
+                SizedBox(width: widget.roomy ? 14 : 10),
+                Text(
+                  widget.section.label,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: widget.roomy ? 15 : 13,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

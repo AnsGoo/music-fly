@@ -25,7 +25,7 @@ Future<void> showCastSheet(BuildContext context) {
     context: context,
     backgroundColor: Mf.surface,
     shape: RoundedRectangleBorder(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(MfRadius.sheet)),
       side: BorderSide(color: Mf.border),
     ),
     builder: (_) => ChangeNotifierProvider<AppModel>.value(
@@ -91,6 +91,8 @@ class _CastDevicePicker extends StatelessWidget {
                 model.castScanDone
                     ? '未发现投屏设备，请确认设备与本机在同一局域网'
                     : '尚未扫描',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Mf.muted, fontSize: 13),
               ),
@@ -155,53 +157,57 @@ class _DeviceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(10),
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
-        child: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: Mf.accentWash,
-                borderRadius: BorderRadius.circular(9),
+    return Semantics(
+      button: true,
+      label: '连接到投屏设备 $name',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(MfRadius.md),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: Mf.accentWash,
+                  borderRadius: BorderRadius.circular(MfRadius.sm),
+                ),
+                child: const Icon(
+                  Icons.speaker_rounded,
+                  size: 17,
+                  color: Mf.accentHover,
+                ),
               ),
-              child: const Icon(
-                Icons.speaker_rounded,
-                size: 17,
-                color: Mf.accentHover,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Mf.text,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Mf.text,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Mf.faint, fontSize: 11),
-                  ),
-                ],
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const Icon(Icons.chevron_right_rounded, size: 18, color: Mf.faint),
-          ],
+              const Icon(Icons.chevron_right_rounded, size: 18, color: Mf.muted),
+            ],
+          ),
         ),
       ),
     );
@@ -244,12 +250,12 @@ class _CastRemote extends StatelessWidget {
                   end: Alignment.bottomRight,
                   colors: [Mf.accentHover, Mf.accent],
                 ),
-                borderRadius: BorderRadius.circular(9),
+                borderRadius: BorderRadius.circular(MfRadius.sm),
               ),
               child: const Icon(
                 Icons.cast_rounded,
                 size: 17,
-                color: Colors.white,
+                color: Mf.cream,
               ),
             ),
             const SizedBox(width: 12),
@@ -270,7 +276,9 @@ class _CastRemote extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     stateLabel,
-                    style: const TextStyle(color: Mf.faint, fontSize: 11),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
                   ),
                 ],
               ),
@@ -305,10 +313,11 @@ class _CastRemote extends StatelessWidget {
         const SizedBox(height: 6),
         Row(
           children: [
-            const Icon(Icons.volume_up_rounded, size: 16, color: Mf.faint),
+            const Icon(Icons.volume_up_rounded, size: 16, color: Mf.muted),
             const SizedBox(width: 8),
             Expanded(
               child: MfScrubber(
+                label: '投屏音量',
                 fraction: model.castVolume,
                 thumbColor: Mf.textSoft,
                 activeColor: Mf.muted,
@@ -408,10 +417,12 @@ class _CastProgressState extends State<_CastProgress> {
                     formatClock(_preview != null
                         ? _preview! * seconds
                         : position.inMilliseconds / 1000.0),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.right,
                     style: const TextStyle(
-                      color: Mf.faint,
-                      fontSize: 11,
+                      color: Mf.muted,
+                      fontSize: MfType.label,
                       fontFeatures: [FontFeature.tabularFigures()],
                     ),
                   ),
@@ -419,6 +430,7 @@ class _CastProgressState extends State<_CastProgress> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: MfScrubber(
+                    label: '投屏播放进度',
                     fraction: fraction,
                     onScrub: (value) => setState(() => _preview = value),
                     onCommit: () {
@@ -437,9 +449,11 @@ class _CastProgressState extends State<_CastProgress> {
                   width: 38,
                   child: Text(
                     formatClock(seconds),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      color: Mf.faint,
-                      fontSize: 11,
+                      color: Mf.muted,
+                      fontSize: MfType.label,
                       fontFeatures: [FontFeature.tabularFigures()],
                     ),
                   ),

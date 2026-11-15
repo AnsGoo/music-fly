@@ -151,7 +151,7 @@ class _Toolbar extends StatelessWidget {
                         model.headerSubtitle,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Mf.faint, fontSize: 11.5),
+                        style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
                       ),
                     ],
                   ),
@@ -468,59 +468,63 @@ class _GridCardState extends State<_GridCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Grid cells have a fixed height (childAspectRatio). A square
-            // AspectRatio + two text lines overflows it when font metrics are
-            // taller than the design baseline (12 px on the HarmonyOS emulator,
-            // which draws Flutter's yellow overflow banner). Let the artwork
-            // absorb the leftover height so the text always fits.
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  CoverImage(url: widget.coverUrl, radius: 8),
-                  if (_hovered)
-                    Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: Mf.bg.withValues(alpha: 0.28),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Center(
-                          child: Icon(
-                            Icons.play_circle_fill,
-                            size: 40,
-                            color: Mf.cream,
+      child: Semantics(
+        button: true,
+        label: '打开 ${widget.title}',
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Grid cells have a fixed height (childAspectRatio). A square
+              // AspectRatio + two text lines overflows it when font metrics are
+              // taller than the design baseline (12 px on the HarmonyOS emulator,
+              // which draws Flutter's yellow overflow banner). Let the artwork
+              // absorb the leftover height so the text always fits.
+              Expanded(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    CoverImage(url: widget.coverUrl, radius: MfRadius.sm),
+                    if (_hovered)
+                      Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Mf.coverHoverScrim,
+                            borderRadius: BorderRadius.circular(MfRadius.sm),
+                          ),
+                          child: const Center(
+                            child: Icon(
+                              Icons.play_circle_fill,
+                              size: 40,
+                              color: Mf.cream,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 9),
-            Text(
-              widget.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Mf.text,
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
+              const SizedBox(height: 9),
+              Text(
+                widget.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Mf.text,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              widget.subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Mf.faint, fontSize: 11.5),
-            ),
-          ],
+              const SizedBox(height: 2),
+              Text(
+                widget.subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -552,48 +556,52 @@ class _ArtistTileState extends State<_ArtistTile> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: _hovered
-                ? Mf.raised.withValues(alpha: 0.7)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              CoverImage(
-                url: widget.coverUrl,
-                size: 42,
-                circular: true,
-                iconSize: 18,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      artist.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Mf.text, fontSize: 13.5),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      artist.trackCount > 0
-                          ? '${artist.albumCount} 张专辑 · ${artist.trackCount} 首'
-                          : '${artist.albumCount} 张专辑',
-                      style: const TextStyle(color: Mf.faint, fontSize: 11.5),
-                    ),
-                  ],
+      child: Semantics(
+        button: true,
+        label: '查看艺术家 ${artist.name}',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: _hovered ? Mf.rowHover : Mf.transparent,
+              borderRadius: BorderRadius.circular(MfRadius.sm),
+            ),
+            child: Row(
+              children: [
+                CoverImage(
+                  url: widget.coverUrl,
+                  size: 42,
+                  circular: true,
+                  iconSize: 18,
                 ),
-              ),
-              const Icon(Icons.chevron_right, size: 18, color: Mf.faint),
-            ],
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        artist.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Mf.text, fontSize: MfType.bodyLarge),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        artist.trackCount > 0
+                            ? '${artist.albumCount} 张专辑 · ${artist.trackCount} 首'
+                            : '${artist.albumCount} 张专辑',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, size: 18, color: Mf.muted),
+              ],
+            ),
           ),
         ),
       ),

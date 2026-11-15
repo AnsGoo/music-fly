@@ -69,7 +69,7 @@ class _FnFieldState extends State<MfField> {
           widget.label,
           style: TextStyle(
             color: _focused ? Mf.accent : Mf.muted,
-            fontSize: 11.5,
+            fontSize: MfType.label,
             fontWeight: FontWeight.w500,
           ),
         ),
@@ -97,8 +97,8 @@ class _FnFieldState extends State<MfField> {
               decoration: InputDecoration(
                 isCollapsed: true,
                 border: InputBorder.none,
-                hintText: widget.placeholder,
-                hintStyle: const TextStyle(color: Mf.faint, fontSize: 13),
+              hintText: widget.placeholder,
+              hintStyle: const TextStyle(color: Mf.muted, fontSize: MfType.body),
               ),
             ),
           ),
@@ -164,7 +164,7 @@ class _FnSearchFieldState extends State<MfSearchField> {
   Widget build(BuildContext context) {
     final borderColor = _focused
         ? Mf.accent
-        : (_hovered ? Mf.muted : Mf.border);
+        : (_hovered ? Mf.outlineStrong : Mf.border);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -181,7 +181,7 @@ class _FnSearchFieldState extends State<MfSearchField> {
             Icon(
               Icons.search,
               size: 15,
-              color: _focused ? Mf.muted : Mf.faint,
+              color: _focused ? Mf.textSoft : Mf.muted,
             ),
             const SizedBox(width: 7),
             Expanded(
@@ -194,14 +194,14 @@ class _FnSearchFieldState extends State<MfSearchField> {
                   textInputAction: TextInputAction.search,
                   cursorColor: Mf.accent,
                   cursorWidth: 1.4,
-                  style: const TextStyle(fontSize: 12.5, color: Mf.text),
+                  style: const TextStyle(fontSize: MfType.body, color: Mf.text),
                   decoration: InputDecoration(
                     isCollapsed: true,
                     border: InputBorder.none,
                     hintText: widget.placeholder,
                     hintStyle: const TextStyle(
-                      color: Mf.faint,
-                      fontSize: 12.5,
+                      color: Mf.muted,
+                      fontSize: MfType.body,
                     ),
                   ),
                 ),
@@ -212,6 +212,7 @@ class _FnSearchFieldState extends State<MfSearchField> {
                 icon: Icons.close,
                 size: 22,
                 glyph: 12,
+                tooltip: '清除搜索',
                 onTap: () {
                   widget.onClear?.call();
                   _controller.clear();
@@ -257,71 +258,81 @@ class _FnPrimaryButtonState extends State<MfPrimaryButton> {
     final active = widget.enabled && widget.onTap != null;
     final lifted = active && _hovered;
     final pressed = active && _pressed;
-    final radius = BorderRadius.circular(10);
+    final radius = BorderRadius.circular(MfRadius.md);
+    final still = MfMotion.reduced(context);
 
-    return MouseRegion(
-      cursor: active ? SystemMouseCursors.click : SystemMouseCursors.basic,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() {
-        _hovered = false;
-        _pressed = false;
-      }),
-      child: GestureDetector(
-        onTapDown: active ? (_) => setState(() => _pressed = true) : null,
-        onTapUp: active ? (_) => setState(() => _pressed = false) : null,
-        onTapCancel: active ? () => setState(() => _pressed = false) : null,
-        onTap: active ? widget.onTap : null,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeOutCubic,
-          height: widget.height,
-          padding: EdgeInsets.symmetric(horizontal: widget.height * 0.46),
-          transform: Matrix4.translationValues(0, lifted ? -1 : 0, 0),
-          decoration: BoxDecoration(
-            borderRadius: radius,
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: !active
-                  ? const [Mf.raised, Mf.raised]
-                  : pressed
-                  ? const [Color(0xFFD9502F), Mf.accent]
-                  : lifted
-                  ? const [Color(0xFFFA8362), Mf.accentHover]
-                  : const [Mf.accentHover, Mf.accent],
-            ),
-            boxShadow: !active
+    return Semantics(
+      button: true,
+      enabled: active,
+      label: widget.label,
+      child: MouseRegion(
+        cursor: active ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() {
+          _hovered = false;
+          _pressed = false;
+        }),
+        child: GestureDetector(
+          onTapDown: active ? (_) => setState(() => _pressed = true) : null,
+          onTapUp: active ? (_) => setState(() => _pressed = false) : null,
+          onTapCancel: active ? () => setState(() => _pressed = false) : null,
+          onTap: active ? widget.onTap : null,
+          child: AnimatedContainer(
+            duration: MfMotion.of(context, MfMotion.quick),
+            curve: MfMotion.enter,
+            height: widget.height,
+            padding: EdgeInsets.symmetric(horizontal: widget.height * 0.46),
+            transform: still || !lifted
                 ? null
-                : [
-                    BoxShadow(
-                      color: Color(lifted ? 0x5C2A1009 : 0x3D2A1009),
-                      blurRadius: lifted ? 20 : 12,
-                      offset: Offset(0, lifted ? 8 : 4),
-                    ),
-                  ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (widget.icon case final icon?) ...[
-                Icon(
-                  icon,
-                  size: widget.height * 0.46,
-                  color: active ? Mf.cream : Mf.faint,
-                ),
-                const SizedBox(width: 7),
-              ],
-              Text(
-                widget.label,
-                style: TextStyle(
-                  color: active ? Mf.cream : Mf.faint,
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.1,
-                ),
+                : Matrix4.translationValues(0, -1, 0),
+            decoration: BoxDecoration(
+              borderRadius: radius,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: !active
+                    ? const [Mf.raised, Mf.raised]
+                    : pressed
+                    ? const [Mf.accentPressed, Mf.accent]
+                    : lifted
+                    ? const [Mf.accentLift, Mf.accentHover]
+                    : const [Mf.accentHover, Mf.accent],
               ),
-            ],
+              boxShadow: !active
+                  ? null
+                  : [
+                      BoxShadow(
+                        color: Mf.accentShadow.withValues(
+                          alpha: lifted ? 0.36 : 0.24,
+                        ),
+                        blurRadius: lifted ? 20 : 12,
+                        offset: Offset(0, lifted ? 8 : 4),
+                      ),
+                    ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (widget.icon case final icon?) ...[
+                  Icon(
+                    icon,
+                    size: widget.height * 0.46,
+                    color: active ? Mf.cream : Mf.disabled,
+                  ),
+                  const SizedBox(width: MfSpace.x2),
+                ],
+                Text(
+                  widget.label,
+                  style: TextStyle(
+                    color: active ? Mf.cream : Mf.disabled,
+                    fontSize: MfType.bodyLarge,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.1,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -338,6 +349,8 @@ class MfIconButton extends StatefulWidget {
     this.glyph = 18,
     this.color,
     this.tooltip,
+    this.semanticLabel,
+    this.expandHitTarget = false,
   });
 
   final IconData icon;
@@ -346,6 +359,15 @@ class MfIconButton extends StatefulWidget {
   final double glyph;
   final Color? color;
   final String? tooltip;
+
+  /// Screen-reader name. A tooltip only helps pointer users, so icon-only
+  /// controls without one still need an explicit label.
+  final String? semanticLabel;
+
+  /// Grow the invisible hit area to 44dp on touch builds without changing the
+  /// visual 34dp circle. Off by default so dense desktop rows keep their
+  /// carefully balanced widths; see MfTouch.
+  final bool expandHitTarget;
 
   @override
   State<MfIconButton> createState() => _FnIconButtonState();
@@ -357,24 +379,40 @@ class _FnIconButtonState extends State<MfIconButton> {
   @override
   Widget build(BuildContext context) {
     final tint = widget.color ?? Mf.textSoft;
-    final button = MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: widget.size,
-          height: widget.size,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _hovered ? Mf.raised : Colors.transparent,
-          ),
-          child: Icon(
-            widget.icon,
-            size: widget.glyph,
-            color: _hovered ? Mf.text : tint,
+    final hit = widget.expandHitTarget && isMobilePlatform
+        ? MfTouch.minTarget
+        : widget.size;
+    final box = hit > widget.size ? hit : widget.size;
+    final button = Semantics(
+      button: true,
+      enabled: widget.onTap != null,
+      label: widget.tooltip ?? widget.semanticLabel ?? '图标按钮',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: SizedBox(
+            width: box,
+            height: box,
+            child: Center(
+              child: Container(
+                width: widget.size,
+                height: widget.size,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _hovered ? Mf.raised : Mf.transparent,
+                ),
+                child: Icon(
+                  widget.icon,
+                  size: widget.glyph,
+                  color: _hovered ? Mf.text : tint,
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -396,6 +434,8 @@ class MfPlayButton extends StatefulWidget {
     this.tooltip,
     this.size = 34,
     this.glyph = 22,
+    this.semanticLabel,
+    this.expandHitTarget = false,
   });
 
   final bool playing;
@@ -403,6 +443,8 @@ class MfPlayButton extends StatefulWidget {
   final String? tooltip;
   final double size;
   final double glyph;
+  final String? semanticLabel;
+  final bool expandHitTarget;
 
   @override
   State<MfPlayButton> createState() => _MfPlayButtonState();
@@ -413,23 +455,44 @@ class _MfPlayButtonState extends State<MfPlayButton> {
 
   @override
   Widget build(BuildContext context) {
-    final button = MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: widget.size,
-          height: widget.size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _hovered ? Mf.accentHover : Mf.accent,
-          ),
-          child: Icon(
-            widget.playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-            size: widget.glyph,
-            color: Mf.cream,
+    final hit = widget.expandHitTarget && isMobilePlatform
+        ? MfTouch.minTarget
+        : widget.size;
+    final box = hit > widget.size ? hit : widget.size;
+    final button = Semantics(
+      button: true,
+      enabled: widget.onTap != null,
+      label:
+          widget.tooltip ??
+          widget.semanticLabel ??
+          (widget.playing ? '暂停' : '播放'),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: SizedBox(
+            width: box,
+            height: box,
+            child: Center(
+              child: Container(
+                width: widget.size,
+                height: widget.size,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _hovered ? Mf.accentHover : Mf.accent,
+                ),
+                child: Icon(
+                  widget.playing
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  size: widget.glyph,
+                  color: Mf.cream,
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -450,6 +513,7 @@ class MfScrubber extends StatefulWidget {
     this.enabled = true,
     this.thumbColor = Mf.accent,
     this.activeColor = Mf.accent,
+    this.label = '进度',
   });
 
   final double fraction;
@@ -458,6 +522,9 @@ class MfScrubber extends StatefulWidget {
   final bool enabled;
   final Color thumbColor;
   final Color activeColor;
+
+  /// Accessible name ("播放进度" / "音量"), announced with the current value.
+  final String label;
 
   @override
   State<MfScrubber> createState() => _FnScrubberState();
@@ -476,45 +543,66 @@ class _FnScrubberState extends State<MfScrubber> {
     widget.onScrub?.call(value);
   }
 
+  /// Keyboard/screen-reader adjustment: move 5% per increment.
+  void _nudge(double delta) {
+    if (!widget.enabled) return;
+    final value = (_value + delta).clamp(0.0, 1.0);
+    widget.onScrub?.call(value);
+    widget.onCommit?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: widget.enabled
-          ? SystemMouseCursors.click
-          : SystemMouseCursors.basic,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = constraints.maxWidth;
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapDown: (details) {
-              _update(details.localPosition.dx, width);
-              widget.onCommit?.call();
-            },
-            onHorizontalDragStart: (details) =>
-                _update(details.localPosition.dx, width),
-            onHorizontalDragUpdate: (details) =>
-                _update(details.localPosition.dx, width),
-            onHorizontalDragEnd: (_) {
-              setState(() => _dragFraction = null);
-              widget.onCommit?.call();
-            },
-            child: SizedBox(
-              height: 18,
-              child: CustomPaint(
-                painter: _ScrubberPainter(
-                  fraction: _value,
-                  enabled: widget.enabled,
-                  hovered: _hovered,
-                  thumbColor: widget.thumbColor,
-                  activeColor: widget.activeColor,
+    final percent = (_value * 100).round();
+    final up = ((_value + 0.05).clamp(0.0, 1.0) * 100).round();
+    final down = ((_value - 0.05).clamp(0.0, 1.0) * 100).round();
+    return Semantics(
+      slider: true,
+      label: widget.label,
+      enabled: widget.enabled,
+      value: '$percent%',
+      increasedValue: '$up%',
+      decreasedValue: '$down%',
+      onIncrease: widget.enabled ? () => _nudge(0.05) : null,
+      onDecrease: widget.enabled ? () => _nudge(-0.05) : null,
+      child: MouseRegion(
+        cursor: widget.enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (details) {
+                _update(details.localPosition.dx, width);
+                widget.onCommit?.call();
+              },
+              onHorizontalDragStart: (details) =>
+                  _update(details.localPosition.dx, width),
+              onHorizontalDragUpdate: (details) =>
+                  _update(details.localPosition.dx, width),
+              onHorizontalDragEnd: (_) {
+                setState(() => _dragFraction = null);
+                widget.onCommit?.call();
+              },
+              child: SizedBox(
+                height: 18,
+                child: CustomPaint(
+                  painter: _ScrubberPainter(
+                    fraction: _value,
+                    enabled: widget.enabled,
+                    hovered: _hovered,
+                    thumbColor: widget.thumbColor,
+                    activeColor: widget.activeColor,
+                  ),
                 ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

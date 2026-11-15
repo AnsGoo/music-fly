@@ -46,7 +46,7 @@ class LyricsPanel extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.right,
-                      style: const TextStyle(color: Mf.faint, fontSize: 12),
+                      style: const TextStyle(color: Mf.muted, fontSize: 12),
                     ),
                   ),
                 const SizedBox(width: 8),

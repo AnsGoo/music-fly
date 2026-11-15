@@ -33,7 +33,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _spin = AnimationController(
     vsync: this,
-    duration: const Duration(seconds: 26),
+    duration: MfMotion.vinyl,
   );
 
   double? _scrubSeconds;
@@ -43,11 +43,14 @@ class _NowPlayingPageState extends State<NowPlayingPage>
   /// it is initialised (`LateInitializationError`). Rebound on dependency
   /// change and on reassemble instead.
   ValueNotifier<PlaybackState>? _playback;
+  bool _reducedMotion = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _reducedMotion = MfMotion.reduced(context);
     _bindPlayback(context.read<AppModel>().playback);
+    _followPlayback();
   }
 
   @override
@@ -55,6 +58,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
     super.reassemble();
     // Hot reload: reattach to the (possibly recreated) model's notifier.
     _bindPlayback(context.read<AppModel>().playback);
+    _followPlayback();
   }
 
   void _bindPlayback(ValueNotifier<PlaybackState> notifier) {
@@ -75,7 +79,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
   /// The disc only turns while audio advances, and keeps its angle on pause.
   void _followPlayback() {
     if (!mounted) return;
-    final playing = _playback?.value.playing ?? false;
+    final playing = (_playback?.value.playing ?? false) && !_reducedMotion;
     if (playing && !_spin.isAnimating) {
       _spin.repeat();
     } else if (!playing && _spin.isAnimating) {
@@ -188,8 +192,8 @@ class _NowPlayingPageState extends State<NowPlayingPage>
           const Text(
             '正在播放',
             style: TextStyle(
-              color: Mf.faint,
-              fontSize: 11.5,
+              color: Mf.muted,
+              fontSize: MfType.label,
               letterSpacing: 1.4,
               fontWeight: FontWeight.w600,
             ),
@@ -245,7 +249,9 @@ class _NowPlayingPageState extends State<NowPlayingPage>
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             _disc(model, audio, size),
-            _credits(model, audio, gap: 28),
+            // Type scale is now 12dp minimum: keep enough slack under the
+            // disc for the three credit lines on short (500dp) windows.
+            _credits(model, audio, gap: 24),
           ],
         );
       },
@@ -350,7 +356,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
                       textAlign: TextAlign.right,
                       style: const TextStyle(
                         color: Mf.textSoft,
-                        fontSize: 11,
+                        fontSize: MfType.label,
                         fontWeight: FontWeight.w600,
                         fontFeatures: [FontFeature.tabularFigures()],
                       ),
@@ -359,6 +365,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
                   const SizedBox(width: 12),
                   Expanded(
                     child: MfScrubber(
+                      label: '播放进度',
                       fraction: durationSeconds > 0
                           ? (position / durationSeconds).clamp(0.0, 1.0)
                           : 0,
@@ -386,7 +393,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
                       formatClock(durationSeconds),
                       style: const TextStyle(
                         color: Mf.textSoft,
-                        fontSize: 11,
+                        fontSize: MfType.label,
                         fontWeight: FontWeight.w600,
                         fontFeatures: [FontFeature.tabularFigures()],
                       ),
@@ -527,11 +534,12 @@ class _NowPlayingPageState extends State<NowPlayingPage>
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(Icons.volume_up_rounded, size: 16, color: Mf.faint),
+        const Icon(Icons.volume_up_rounded, size: 16, color: Mf.muted),
         const SizedBox(width: 8),
         SizedBox(
           width: 104,
           child: MfScrubber(
+            label: '音量',
             fraction: model.volume,
             thumbColor: Mf.textSoft,
             activeColor: Mf.muted,
@@ -577,6 +585,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
                     child: AnimatedBuilder(
                       animation: model,
                       builder: (_, _) => MfScrubber(
+                        label: '音量',
                         fraction: model.volume,
                         thumbColor: Mf.textSoft,
                         activeColor: Mf.accent,
@@ -630,7 +639,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
                 track.artistLine,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Mf.muted, fontSize: 12.5),
+                style: const TextStyle(color: Mf.muted, fontSize: MfType.body),
               ),
               const SizedBox(height: 14),
               const Divider(height: 1, color: Mf.border),
@@ -655,7 +664,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
             width: 56,
             child: Text(
               label,
-              style: const TextStyle(color: Mf.muted, fontSize: 12.5),
+              style: const TextStyle(color: Mf.muted, fontSize: MfType.body),
             ),
           ),
           Expanded(
@@ -663,7 +672,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
               (value == null || value.isEmpty) ? '—' : value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Mf.textSoft, fontSize: 12.5),
+              style: const TextStyle(color: Mf.textSoft, fontSize: MfType.body),
             ),
           ),
         ],
@@ -701,13 +710,17 @@ class _Backdrop extends StatelessWidget {
               ),
             ),
           ),
-        const DecoratedBox(
+        DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [Color(0xDE131010), Color(0xB8131010), Color(0xEA131010)],
-              stops: [0, 0.55, 1],
+              colors: [
+                Mf.bg.withValues(alpha: 0.87),
+                Mf.bg.withValues(alpha: 0.72),
+                Mf.bg.withValues(alpha: 0.92),
+              ],
+              stops: const [0, 0.55, 1],
             ),
           ),
         ),
@@ -735,7 +748,7 @@ class _Disc extends StatelessWidget {
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: Color(0x66000000),
+                  color: Mf.discShadow,
                   blurRadius: 44,
                   offset: Offset(0, 12),
                 ),
@@ -775,7 +788,7 @@ class _GroovePainter extends CustomPainter {
       radius,
       Paint()
         ..shader = const RadialGradient(
-          colors: [Color(0x14FFFFFF), Color(0x00FFFFFF)],
+          colors: [Mf.gloss, Mf.transparent],
           stops: [0, 0.16],
         ).createShader(rect),
     );
@@ -787,7 +800,7 @@ class _GroovePainter extends CustomPainter {
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = radius * 0.045
-          ..color = const Color(0x2E000000),
+          ..color = Mf.discShade,
       );
     }
     canvas.drawCircle(
@@ -796,7 +809,7 @@ class _GroovePainter extends CustomPainter {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1
-        ..color = const Color(0x33FFFFFF),
+        ..color = Mf.discGloss,
     );
     canvas.drawCircle(
       center,
@@ -805,7 +818,7 @@ class _GroovePainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = radius * 0.6
         ..shader = const RadialGradient(
-          colors: [Color(0x00000000), Color(0x00000000), Color(0x24000000)],
+          colors: [Mf.transparent, Mf.transparent, Mf.discEdge],
           stops: [0, 0.72, 1],
         ).createShader(rect),
     );
@@ -823,32 +836,37 @@ class _PlayButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          width: 56,
-          height: 56,
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Mf.accentHover, Mf.accent],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Color(0x522A1009),
-                blurRadius: 24,
-                offset: Offset(0, 10),
+    return Semantics(
+      button: true,
+      label: playing ? '暂停' : '播放',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Mf.accentHover, Mf.accent],
               ),
-            ],
-          ),
-          child: Icon(
-            playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-            size: 30,
-            color: Mf.cream,
+              boxShadow: [
+                BoxShadow(
+                  color: Mf.accentShadow.withValues(alpha: 0.32),
+                  blurRadius: 24,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Icon(
+              playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+              size: 30,
+              color: Mf.cream,
+            ),
           ),
         ),
       ),
@@ -876,21 +894,34 @@ class _CircleButtonState extends State<_CircleButton> {
 
   @override
   Widget build(BuildContext context) {
-    final button = MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: 38,
-          height: 38,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _hovered ? Mf.raised : Mf.surfaceAlt,
-            border: Border.all(color: Mf.border),
+    // Touch builds get a 44dp hit area around the same 38dp circle.
+    final hit = isMobilePlatform ? MfTouch.minTarget : 38.0;
+    final button = Semantics(
+      button: true,
+      label: widget.tooltip ?? '图标按钮',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: SizedBox(
+            width: hit,
+            height: hit,
+            child: Center(
+              child: Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _hovered ? Mf.raised : Mf.surfaceAlt,
+                  border: Border.all(color: Mf.border),
+                ),
+                child: Icon(widget.icon, size: 19, color: Mf.textSoft),
+              ),
+            ),
           ),
-          child: Icon(widget.icon, size: 19, color: Mf.textSoft),
         ),
       ),
     );

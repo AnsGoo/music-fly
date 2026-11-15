@@ -183,6 +183,8 @@ class _SearchResults extends StatelessWidget {
         child: Center(
           child: Text(
             '没有找到「${model.homeQuery}」',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: Mf.muted, fontSize: 14),
           ),
         ),
@@ -253,36 +255,50 @@ class _SectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final subtitleText = Padding(
+      padding: const EdgeInsets.only(bottom: 1),
+      child: Text(
+        subtitle,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
+      ),
+    );
     final header = Padding(
       padding: const EdgeInsets.fromLTRB(4, 4, 4, 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // A docked queue narrows the library pane; without flex here the
-          // title + subtitle could push "查看全部" out of the Row.
-          Flexible(
-            child: Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Mf.text,
-                fontSize: 16.5,
-                fontWeight: FontWeight.w600,
-                letterSpacing: -0.2,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
+          // One Expanded owns every pixel left of the trailing action, so
+          // "查看全部" always lands on the right edge. Nesting a Spacer here
+          // instead would split the slack three ways and leave the action in
+          // the middle of the card.
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 1),
-              child: Text(
-                subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Mf.muted, fontSize: 11.5),
-              ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Flexible(
+                  child: Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Mf.text,
+                      fontSize: 16.5,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // Cards without the action keep the old half-row subtitle;
+                // cards with it let the subtitle hug the title so the right
+                // edge is free for the action.
+                if (onTitleTap == null)
+                  Expanded(child: subtitleText)
+                else
+                  Flexible(child: subtitleText),
+              ],
             ),
           ),
           if (onTitleTap != null) ...[
@@ -304,7 +320,7 @@ class _SectionCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
       decoration: BoxDecoration(
         color: Mf.surface,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(MfRadius.lg),
         border: Border.all(color: Mf.border),
       ),
       child: Column(
@@ -312,10 +328,19 @@ class _SectionCard extends StatelessWidget {
         children: [
           onTitleTap == null
               ? header
-              : InkWell(
-                  borderRadius: BorderRadius.circular(8),
-                  onTap: onTitleTap,
-                  child: header,
+              // The header must span the whole card, otherwise its Row wraps
+              // to content width and "查看全部" lands near the middle.
+              : SizedBox(
+                  width: double.infinity,
+                  child: Semantics(
+                    button: true,
+                    label: '查看全部$title',
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(MfRadius.sm),
+                      onTap: onTitleTap,
+                      child: header,
+                    ),
+                  ),
                 ),
           child,
         ],
@@ -533,7 +558,9 @@ class _CardEmpty extends StatelessWidget {
       child: Center(
         child: Text(
           text,
-          style: const TextStyle(color: Mf.faint, fontSize: 12.5),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Mf.muted, fontSize: MfType.body),
         ),
       ),
     );
@@ -572,76 +599,81 @@ class _AlbumCardState extends State<_AlbumCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: SizedBox(
-          width: widget.width,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              AspectRatio(
-                aspectRatio: 1,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    CoverImage(url: widget.coverUrl, radius: 8),
-                    if (widget.highlight)
-                      Positioned.fill(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Mf.accent, width: 2),
-                          ),
-                        ),
-                      ),
-                    if (_hovered)
-                      Positioned.fill(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: Mf.bg.withValues(alpha: 0.28),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Center(
-                            child: Icon(
-                              Icons.play_circle_fill,
-                              size: 34,
-                              color: widget.highlight
-                                  ? Mf.accentHover
-                                  : Mf.cream,
+      child: Semantics(
+        button: true,
+        selected: widget.highlight,
+        label: '打开 ${widget.title}',
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: SizedBox(
+            width: widget.width,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                AspectRatio(
+                  aspectRatio: 1,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      CoverImage(url: widget.coverUrl, radius: MfRadius.sm),
+                      if (widget.highlight)
+                        Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(MfRadius.sm),
+                              border: Border.all(color: Mf.accent, width: 2),
                             ),
                           ),
                         ),
-                      ),
-                  ],
+                      if (_hovered)
+                        Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Mf.coverHoverScrim,
+                              borderRadius: BorderRadius.circular(MfRadius.sm),
+                            ),
+                            child: Center(
+                              child: Icon(
+                                Icons.play_circle_fill,
+                                size: 34,
+                                color: widget.highlight
+                                    ? Mf.accentHover
+                                    : Mf.cream,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                widget.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                // Pin the line height: platform font fallbacks (notably the
-                // CJK one on Android) are a hair taller than Roboto's and
-                // overflowed the fixed-height card row by 1px.
-                style: TextStyle(
-                  color: widget.highlight ? Mf.accentHover : Mf.text,
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w500,
-                  height: 1.25,
+                const SizedBox(height: 8),
+                Text(
+                  widget.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  // Pin the line height: platform font fallbacks (notably the
+                  // CJK one on Android) are a hair taller than Roboto's and
+                  // overflowed the fixed-height card row by 1px.
+                  style: TextStyle(
+                    color: widget.highlight ? Mf.accentHover : Mf.text,
+                    fontSize: MfType.body,
+                    fontWeight: FontWeight.w500,
+                    height: 1.25,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                widget.subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Mf.faint,
-                  fontSize: 11,
-                  height: 1.2,
+                const SizedBox(height: 2),
+                Text(
+                  widget.subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Mf.muted,
+                    fontSize: MfType.label,
+                    height: 1.2,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -677,39 +709,45 @@ class _ArtistCardState extends State<_ArtistCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: SizedBox(
-          width: widget.width,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              CoverImage(
-                url: widget.coverUrl,
-                size: widget.width - 8,
-                circular: true,
-                iconSize: 30,
-              ),
-              const SizedBox(height: 9),
-              Text(
-                widget.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: _hovered ? Mf.accentHover : Mf.text,
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w500,
+      child: Semantics(
+        button: true,
+        label: '查看艺术家 ${widget.name}',
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: SizedBox(
+            width: widget.width,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                CoverImage(
+                  url: widget.coverUrl,
+                  size: widget.width - 8,
+                  circular: true,
+                  iconSize: 30,
                 ),
-              ),
-              if (widget.subtitle.isNotEmpty) ...[
-                const SizedBox(height: 2),
+                const SizedBox(height: 9),
                 Text(
-                  widget.subtitle,
-                  style: const TextStyle(color: Mf.faint, fontSize: 11),
+                  widget.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: _hovered ? Mf.accentHover : Mf.text,
+                    fontSize: MfType.body,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
+                if (widget.subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

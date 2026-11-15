@@ -47,7 +47,7 @@ class _DetailViewState extends State<DetailView> {
             children: [
               DecoratedBox(
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(MfRadius.lg),
                   boxShadow: const [
                     BoxShadow(
                       color: Color(0x59000000),
@@ -59,7 +59,7 @@ class _DetailViewState extends State<DetailView> {
                 child: CoverImage(
                   url: model.coverUrl(detail.coverId),
                   size: widget.wide ? 150 : 104,
-                  radius: 12,
+                  radius: MfRadius.lg,
                   circular: detail.isArtist,
                 ),
               ),
@@ -100,7 +100,7 @@ class _DetailViewState extends State<DetailView> {
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: Mf.muted,
-                              fontSize: 12.5,
+                              fontSize: MfType.body,
                             ),
                           ),
                         ),
@@ -275,55 +275,59 @@ class _AlbumTileState extends State<_AlbumTile> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            AspectRatio(
-              aspectRatio: 1,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  CoverImage(url: widget.coverUrl, radius: 8),
-                  if (_hovered)
-                    Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: Mf.bg.withValues(alpha: 0.28),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Center(
-                          child: Icon(
-                            Icons.play_circle_fill,
-                            size: 40,
-                            color: Mf.cream,
+      child: Semantics(
+        button: true,
+        label: '打开专辑 ${widget.title}',
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AspectRatio(
+                aspectRatio: 1,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    CoverImage(url: widget.coverUrl, radius: MfRadius.sm),
+                    if (_hovered)
+                      Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Mf.coverHoverScrim,
+                            borderRadius: BorderRadius.circular(MfRadius.sm),
+                          ),
+                          child: const Center(
+                            child: Icon(
+                              Icons.play_circle_fill,
+                              size: 40,
+                              color: Mf.cream,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 9),
-            Text(
-              widget.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Mf.text,
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
+              const SizedBox(height: 9),
+              Text(
+                widget.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Mf.text,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              widget.subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Mf.faint, fontSize: 11.5),
-            ),
-          ],
+              const SizedBox(height: 2),
+              Text(
+                widget.subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
+              ),
+            ],
+          ),
         ),
       ),
     );

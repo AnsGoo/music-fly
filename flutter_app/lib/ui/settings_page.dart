@@ -34,13 +34,15 @@ class _SettingsPageState extends State<SettingsPage> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Mf.surfaceAlt,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(MfRadius.lg)),
         title: const Text(
           '退出登录',
           style: TextStyle(color: Mf.text, fontSize: 16),
         ),
         content: const Text(
           '将清除本机保存的登录信息，需要重新连接服务器。',
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(color: Mf.textSoft, fontSize: 13),
         ),
         actions: [
@@ -82,7 +84,7 @@ class _SettingsPageState extends State<SettingsPage> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Mf.surfaceAlt,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(MfRadius.lg)),
         title: const Text(
           '添加备用地址',
           style: TextStyle(color: Mf.text, fontSize: 16),
@@ -93,7 +95,9 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             const Text(
               '同一服务器的另一个入口，例如外网地址或局域网地址。',
-              style: TextStyle(color: Mf.textSoft, fontSize: 12.5),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: Mf.textSoft, fontSize: MfType.body),
             ),
             const SizedBox(height: 14),
             MfField(
@@ -188,7 +192,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             const SizedBox(height: 2),
                             const Text(
                               '已登录',
-                              style: TextStyle(color: Mf.muted, fontSize: 11.5),
+                              style: TextStyle(color: Mf.muted, fontSize: MfType.label),
                             ),
                           ],
                         ),
@@ -242,7 +246,9 @@ class _SettingsPageState extends State<SettingsPage> {
                           '由应用自动切换，无需手动配置备用地址。'
                         : '多地址自动切换：每 2 分钟探测一次所有地址并优选延迟最低的'
                           '（局域网与外网同时可达时自动走局域网）；请求失败时立即重新探测。',
-                    style: const TextStyle(color: Mf.faint, fontSize: 11),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Mf.muted, fontSize: MfType.label),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -267,7 +273,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 const Text(
                   '兼容 Navidrome / Subsonic 生态',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Mf.faint, fontSize: 11.5),
+                  style: TextStyle(color: Mf.muted, fontSize: MfType.label),
                 ),
               ],
             ),
@@ -315,7 +321,7 @@ class _AddressRow extends StatelessWidget {
     final statusColor = !probed
         ? Mf.muted
         : online
-        ? const Color(0xFF7BC47F)
+        ? Mf.success
         : Mf.accentHover;
     final statusLabel = !probed
         ? '探测中…'
@@ -329,7 +335,7 @@ class _AddressRow extends StatelessWidget {
           Icon(
             active ? Icons.radio_button_checked_rounded : Icons.circle_outlined,
             size: 15,
-            color: active ? Mf.accent : Mf.faint,
+            color: active ? Mf.accent : Mf.muted,
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -343,8 +349,8 @@ class _AddressRow extends StatelessWidget {
                       ? '当前使用'
                       : '备用地址',
                   style: TextStyle(
-                    color: active ? Mf.accent : Mf.faint,
-                    fontSize: 10.5,
+                    color: active ? Mf.accent : Mf.muted,
+                    fontSize: MfType.label,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 0.6,
                   ),
@@ -352,7 +358,8 @@ class _AddressRow extends StatelessWidget {
                 const SizedBox(height: 1),
                 SelectableText(
                   address.toString(),
-                  style: const TextStyle(color: Mf.textSoft, fontSize: 12.5),
+                  maxLines: 1,
+                  style: const TextStyle(color: Mf.textSoft, fontSize: MfType.body),
                 ),
               ],
             ),
@@ -369,7 +376,7 @@ class _AddressRow extends StatelessWidget {
           const SizedBox(width: 5),
           Text(
             statusLabel,
-            style: TextStyle(color: statusColor, fontSize: 11.5),
+            style: TextStyle(color: statusColor, fontSize: MfType.label),
           ),
           if (!managed) ...[
             const SizedBox(width: 4),
@@ -412,22 +419,26 @@ class _AddAddressRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onAdd,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            children: [
-              const Icon(Icons.add_link_rounded, size: 16, color: Mf.muted),
-              const SizedBox(width: 8),
-              Text(
-                '添加备用地址',
-                style: TextStyle(color: Mf.textSoft, fontSize: 12.5),
-              ),
-            ],
+    return Semantics(
+      button: true,
+      label: '添加备用服务器地址',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onAdd,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                const Icon(Icons.add_link_rounded, size: 16, color: Mf.muted),
+                const SizedBox(width: 8),
+                Text(
+                  '添加备用地址',
+                  style: TextStyle(color: Mf.textSoft, fontSize: MfType.body),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -483,18 +494,20 @@ class _SwitchServerDialogState extends State<_SwitchServerDialog> {
     final model = context.watch<AppModel>();
     return AlertDialog(
       backgroundColor: Mf.surfaceAlt,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(MfRadius.lg)),
       title: const Text(
         '切换服务器',
         style: TextStyle(color: Mf.text, fontSize: 16),
       ),
       // Scrollable within a screen-height cap so short windows (phone
-      // landscape) never overflow the dialog.
+      // landscape) never overflow the AlertDialog.
       content: _ScrollableDialogBody(
         children: [
           const Text(
             '将退出当前登录并连接新服务器。',
-            style: TextStyle(color: Mf.textSoft, fontSize: 12.5),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: Mf.textSoft, fontSize: MfType.body),
           ),
           const SizedBox(height: 14),
           MfField(
@@ -521,6 +534,8 @@ class _SwitchServerDialogState extends State<_SwitchServerDialog> {
             const SizedBox(height: 10),
             Text(
               model.error!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: Mf.accentHover, fontSize: 12),
             ),
           ],
@@ -576,15 +591,7 @@ class _SectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(left: 4, bottom: 8),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Mf.faint,
-          fontSize: 11.5,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 1.4,
-        ),
-      ),
+      child: SectionLabel(text),
     );
   }
 }
@@ -600,7 +607,7 @@ class _Card extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 4),
       decoration: BoxDecoration(
         color: Mf.surface,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(MfRadius.md),
         border: Border.all(color: Mf.border),
       ),
       child: child,
@@ -631,7 +638,8 @@ class _InfoRow extends StatelessWidget {
           Expanded(
             child: SelectableText(
               value,
-              style: const TextStyle(color: Mf.textSoft, fontSize: 12.5),
+              maxLines: 1,
+              style: const TextStyle(color: Mf.textSoft, fontSize: MfType.body),
             ),
           ),
         ],
@@ -672,43 +680,47 @@ class _DangerButtonState extends State<_DangerButton> {
 
   @override
   Widget build(BuildContext context) {
-    final color = widget.destructive ? Mf.accentHover : Mf.textSoft;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          height: 40,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: _hovered ? Mf.surfaceAlt : Mf.surface,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: widget.destructive
-                  ? color.withValues(alpha: 0.45)
-                  : Mf.border,
+    final color = widget.destructive ? Mf.danger : Mf.textSoft;
+    return Semantics(
+      button: true,
+      label: widget.label,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: _hovered ? Mf.surfaceAlt : Mf.surface,
+              borderRadius: BorderRadius.circular(MfRadius.md),
+              border: Border.all(
+                color: widget.destructive
+                    ? color.withValues(alpha: 0.45)
+                    : Mf.border,
+              ),
             ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                widget.destructive ? Icons.logout_rounded : Icons.dns_outlined,
-                size: 15,
-                color: color,
-              ),
-              const SizedBox(width: 7),
-              Text(
-                widget.label,
-                style: TextStyle(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  widget.destructive ? Icons.logout_rounded : Icons.dns_outlined,
+                  size: 15,
                   color: color,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
                 ),
-              ),
-            ],
+                const SizedBox(width: 7),
+                Text(
+                  widget.label,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
