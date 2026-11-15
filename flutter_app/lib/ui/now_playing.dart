@@ -38,20 +38,36 @@ class _NowPlayingPageState extends State<NowPlayingPage>
 
   double? _scrubSeconds;
 
-  /// Captured in [initState]: `dispose` must not look the provider up again.
-  late final MfPlayer _player;
+  /// Never `late`: hot reload keeps this State alive without re-running
+  /// [initState], so a late field added in a newer build would be read before
+  /// it is initialised (`LateInitializationError`). Rebound on dependency
+  /// change and on reassemble instead.
+  ValueNotifier<PlaybackState>? _playback;
 
   @override
-  void initState() {
-    super.initState();
-    _player = context.read<AppModel>().player;
-    _player.state.addListener(_followPlayback);
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _bindPlayback(context.read<AppModel>().playback);
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    // Hot reload: reattach to the (possibly recreated) model's notifier.
+    _bindPlayback(context.read<AppModel>().playback);
+  }
+
+  void _bindPlayback(ValueNotifier<PlaybackState> notifier) {
+    if (identical(_playback, notifier)) return;
+    _playback?.removeListener(_followPlayback);
+    _playback = notifier;
+    notifier.addListener(_followPlayback);
     _followPlayback();
   }
 
   @override
   void dispose() {
-    _player.state.removeListener(_followPlayback);
+    _playback?.removeListener(_followPlayback);
     _spin.dispose();
     super.dispose();
   }
@@ -59,7 +75,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
   /// The disc only turns while audio advances, and keeps its angle on pause.
   void _followPlayback() {
     if (!mounted) return;
-    final playing = _player.state.value.playing;
+    final playing = _playback?.value.playing ?? false;
     if (playing && !_spin.isAnimating) {
       _spin.repeat();
     } else if (!playing && _spin.isAnimating) {
@@ -77,7 +93,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
       child: Focus(
         autofocus: true,
         child: ValueListenableBuilder<PlaybackState>(
-          valueListenable: model.player.state,
+          valueListenable: model.playback,
           builder: (context, audio, _) {
             final coverId = audio.coverId;
             return Stack(
@@ -298,7 +314,7 @@ class _NowPlayingPageState extends State<NowPlayingPage>
     }
     return LyricsBody(
       lyrics: model.lyrics,
-      playback: model.player.state,
+      playback: model.playback,
       onSeek: model.seek,
     );
   }

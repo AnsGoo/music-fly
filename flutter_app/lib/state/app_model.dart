@@ -120,6 +120,8 @@ class AppModel extends ChangeNotifier {
        _castSessionFactory = castSessionFactory {
     this.player.onCompleted = _handleCompleted;
     this.player.onFailed = _handleFailure;
+    this.player.state.addListener(_mirrorLocalPlayback);
+    _mirrorLocalPlayback();
     // A transport failure (leaving the LAN, NAS asleep) must re-probe the FNID
     // address pool right away instead of waiting for the slow periodic sweep.
     // Both callbacks are awaited by the client, which replays the failed
@@ -276,7 +278,17 @@ class AppModel extends ChangeNotifier {
   CastSession? _castSession;
   StreamSubscription<SessionState>? _castStateSub;
   StreamSubscription<double>? _castVolumeSub;
+  StreamSubscription<Duration>? _castPositionSub;
   double _castVolume = 1.0;
+
+  /// The UI's single playback snapshot. It mirrors the local player normally
+  /// and the renderer while casting, so the transport, the spinning disc and
+  /// (most importantly) the synced lyrics follow whatever is actually making
+  /// sound. A stable notifier keeps every ValueListenableBuilder subscribed
+  /// across the local <-> cast handover.
+  final ValueNotifier<PlaybackState> playback = ValueNotifier(
+    const PlaybackState(),
+  );
 
   Future<void>? _loadTask;
   bool _completedGuard = false;
@@ -2143,30 +2155,73 @@ class AppModel extends ChangeNotifier {
   /// local playback stay one queue with one set of controls.
   Future<void> _castToSession(Track track, CastSession session) async {
     try {
-      final transcode = needsTranscode(track.format);
-      final url = client.streamUrl(
-        track.id,
-        format: transcode ? 'mp3' : null,
-        maxBitRate: transcode ? 192 : null,
-      );
-      await session.loadMedia(
+      // SetAVTransportURI carries exactly one metadata document per track and
+      // cannot be amended later, so lyrics have to be fetched *before* the
+      // push. A slow or broken lyrics endpoint must not hold up playback.
+      final run = ++_lyricsRun;
+      _lyricsLoading = true;
+      Lyrics? lyrics;
+      try {
+        lyrics = await client
+            .structuredLyrics(track.id, retryable: false)
+            .timeout(const Duration(seconds: 1));
+      } catch (_) {
+        // Cast with whatever metadata is available.
+      }
+      // A newer track (or a disconnected renderer) owns the TV now.
+      if (run != _lyricsRun ||
+          currentTrack?.id != track.id ||
+          _castSession != session) {
+        return;
+      }
+      _lyrics = lyrics;
+      _lyricsLoading = false;
+      notifyListeners();
+
+      // Only real MP3 files are handed to the renderer untouched. Every other
+      // container goes through the backend's DLNA transcode route, which
+      // produces a complete MP3 with Content-Length/Range — strict TV
+      // renderers reject a raw FLAC/M4A body labeled as MP3 and report a
+      // player error (or silently fall back to another play route).
+      final isMp3 = track.format?.toLowerCase() == 'mp3';
+      final url = client.castStreamUrl(track.id, dlnaTranscode: !isMp3);
+      await loadCastAudio(
+        session,
         CastMedia(
           url: url,
-          // AudioDlnaSession ignores this and labels the item audio/mpeg; a
-          // future Chromecast session would read it.
+          // AudioDlnaSession builds its own audio DIDL, so `type` is only a
+          // placeholder for a future Chromecast/AirPlay session.
           type: CastMediaType.mp4,
           title: track.title,
+          imageUrl: client.castCoverUrl(track.coverId),
           duration: Duration(
             milliseconds: (track.durationSeconds * 1000).round(),
           ),
         ),
+        metadata: buildCastAudioMetadata(
+          artist: track.artists.isEmpty ? null : track.artistLine,
+          album: track.album?.name,
+          lyricsText: _plainLyrics(lyrics),
+          lyricsLrc: lyrics != null && lyrics.isTimed ? lyrics.raw : null,
+        ),
       );
+      _publishCastPlayback(position: Duration.zero);
       notifyListeners();
-      unawaited(loadLyrics());
     } catch (failure) {
+      if (_lyricsLoading) _lyricsLoading = false;
       _error = '投屏失败：$failure';
       notifyListeners();
     }
+  }
+
+  /// Plain-text lyrics for the renderer's description fields. Timed LRC keeps
+  /// its timestamps in [Lyrics.raw], which goes to dc:longDescription instead.
+  static String? _plainLyrics(Lyrics? lyrics) {
+    if (lyrics == null) return null;
+    if (lyrics.isTimed) {
+      return lyrics.lines.map((line) => line.text).join('\n');
+    }
+    return lyrics.plain ?? lyrics.raw;
   }
 
   /// A track the server refused to serve. Step over it when the queue has
@@ -2321,10 +2376,15 @@ class AppModel extends ChangeNotifier {
       _castStateSub?.cancel();
       _castVolumeSub?.cancel();
       _castStateSub = session.stateStream.listen(_onCastState);
+      _castPositionSub?.cancel();
+      _castPositionSub = session.positionStream.listen(
+        (position) => _publishCastPlayback(position: position),
+      );
       _castVolumeSub = session.volumeStream.listen((value) {
         _castVolume = value.clamp(0.0, 1.0);
         notifyListeners();
       });
+      _publishCastPlayback(position: Duration.zero, playing: false);
       notifyListeners();
       final track = currentTrack;
       if (track != null) await _startTrack(track);
@@ -2346,8 +2406,12 @@ class AppModel extends ChangeNotifier {
     _castStateSub = null;
     _castVolumeSub?.cancel();
     _castVolumeSub = null;
+    _castPositionSub?.cancel();
+    _castPositionSub = null;
     _castSession = null;
     _castDevice = null;
+    // Hand the transport and the lyrics back to the local player.
+    _mirrorLocalPlayback();
     notifyListeners();
     if (session != null) {
       try {
@@ -2357,11 +2421,48 @@ class AppModel extends ChangeNotifier {
     if (restoreLocal && track != null) await _startTrack(track);
   }
 
+  /// Local player ticks are the UI's default source of truth.
+  void _mirrorLocalPlayback() {
+    if (_castSession != null) return;
+    playback.value = player.state.value;
+  }
+
+  /// Rebuilds the UI snapshot from the renderer. The lyrics view reads
+  /// [playback] every tick, so without this it would sit frozen at the local
+  /// player's (paused) position for the whole cast session.
+  void _publishCastPlayback({Duration? position, bool? playing}) {
+    final session = _castSession;
+    if (session == null) return;
+    final track = currentTrack;
+    final base = playback.value;
+    final duration = session.duration > Duration.zero
+        ? session.duration
+        : track == null
+        ? base.duration
+        : Duration(milliseconds: (track.durationSeconds * 1000).round());
+    playback.value = PlaybackState(
+      trackId: track?.id ?? base.trackId,
+      title: track?.title ?? base.title,
+      subtitle: track?.subtitle ?? base.subtitle,
+      coverId: track?.coverId ?? base.coverId,
+      coverUrl: client.coverUrl(track?.coverId, size: 320),
+      playing: playing ?? base.playing,
+      position: position ?? base.position,
+      duration: duration,
+    );
+  }
+
   /// Renderer transport updates: playing/paused only refresh the UI, while
   /// a stop near the end of the track advances the queue, mirroring what the
   /// local player does on completion.
   void _onCastState(SessionState state) {
     if (_disposed) return;
+    _publishCastPlayback(
+      playing:
+          state == SessionState.playing ||
+          state == SessionState.buffering ||
+          state == SessionState.loading,
+    );
     if (state == SessionState.idle) {
       final session = _castSession;
       final nearEnd =
@@ -2451,11 +2552,14 @@ class AppModel extends ChangeNotifier {
     _stopAddressProbe();
     _castStateSub?.cancel();
     _castVolumeSub?.cancel();
+    _castPositionSub?.cancel();
     unawaited(_castService?.dispose());
     // 先解绑再销毁播放器：媒体会话的监听器挂在 player.state 上，那个
     // ValueNotifier 马上就要被 dispose 了。
     MfMediaSession.instance?.unbind();
+    player.state.removeListener(_mirrorLocalPlayback);
     player.dispose();
+    playback.dispose();
     super.dispose();
   }
 }

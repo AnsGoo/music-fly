@@ -5,11 +5,14 @@ import 'dart:io';
 
 import 'package:dart_cast/dart_cast.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 import 'package:musicfly/audio/player.dart';
 import 'package:musicfly/data/models.dart';
 import 'package:musicfly/data/musicfree_client.dart';
 import 'package:musicfly/state/app_model.dart';
+import 'package:musicfly/state/cast_audio_session.dart';
 
 /// Records every control call without touching any network.
 class _FakeSession extends CastSession {
@@ -73,21 +76,31 @@ class _FakePlayer extends MfPlayer {
 }
 
 void main() {
-  List<Track> queue(int count) => [
+  List<Track> queue(int count, {String? format}) => [
     for (var i = 0; i < count; i++)
-      Track(id: 'id$i', title: '曲目${i + 1}', durationSeconds: 180),
+      Track(
+        id: 'id$i',
+        title: '曲目${i + 1}',
+        durationSeconds: 180,
+        format: format,
+        coverId: 'cover$i',
+      ),
   ];
 
-  Future<(AppModel, _FakeSession)> build() async {
+  Future<(AppModel, _FakeSession)> build({
+    List<Track>? tracks,
+    MusicFreeSession? restoredSession,
+  }) async {
     final client = MusicFreeClient();
     client.restore(
-      MusicFreeSession(
-        baseUrl: Uri.parse('http://127.0.0.1:14533'),
-        token: 'token',
-        username: 'admin',
-        subsonicToken: 'subtoken',
-        clientSalt: 'salt',
-      ),
+      restoredSession ??
+          MusicFreeSession(
+            baseUrl: Uri.parse('http://127.0.0.1:14533'),
+            token: 'token',
+            username: 'admin',
+            subsonicToken: 'subtoken',
+            clientSalt: 'salt',
+          ),
     );
     final player = _FakePlayer();
     late final _FakeSession session;
@@ -103,7 +116,7 @@ void main() {
       address: InternetAddress('192.168.1.50'),
       port: 49152,
     );
-    await model.playFrom(queue(3), 0);
+    await model.playFrom(tracks ?? queue(3), 0);
     await model.connectCast(device);
     return (model, session);
   }
@@ -124,6 +137,58 @@ void main() {
     expect(session.loaded.single.title, '曲目1');
     // The local player must not have been reloaded by connecting.
     expect(model.player.state.value.playing, isFalse);
+    model.dispose();
+  });
+
+  test('a non-MP3 track is cast through the DLNA transcode direct link', () async {
+    final (model, session) = await build(
+      tracks: queue(3, format: 'flac'),
+    );
+
+    final castUrl = session.loaded.single.url;
+    expect(castUrl, contains('/rest/stream'));
+    expect(castUrl, contains('format=mp3'));
+    expect(castUrl, contains('dlna=true'));
+    expect(castUrl, contains('estimateContentLength=true'));
+    expect(castUrl, contains('id=id0'));
+    // Auth still travels in the URL: the TV cannot send our headers.
+    expect(castUrl, contains('t='));
+    expect(castUrl, contains('s=salt'));
+    model.dispose();
+  });
+
+  test('an MP3 track keeps the raw, untranscoded direct link', () async {
+    final (model, session) = await build(tracks: queue(3, format: 'mp3'));
+
+    final castUrl = session.loaded.single.url;
+    expect(castUrl, contains('/rest/stream'));
+    expect(castUrl, isNot(contains('format=mp3')));
+    expect(castUrl, isNot(contains('dlna=')));
+    expect(castUrl, isNot(contains('estimateContentLength=')));
+    model.dispose();
+  });
+
+  test('the renderer gets a LAN link even when the app sits on a gateway', () async {
+    final gateway = Uri.parse('https://myid.fnos.net/app/musicfree/');
+    final lan = Uri.parse('http://192.168.1.10:14533/');
+    final (model, session) = await build(
+      restoredSession: MusicFreeSession(
+        baseUrl: gateway,
+        token: 'token',
+        username: 'admin',
+        subsonicToken: 'subtoken',
+        clientSalt: 'salt',
+        addresses: [gateway, lan],
+        fnConnect: true,
+      ),
+    );
+
+    final castUrl = Uri.parse(session.loaded.single.url);
+    expect(castUrl.host, '192.168.1.10');
+    expect(castUrl.port, 14533);
+    expect(castUrl.path, '/rest/stream');
+    expect(castUrl.queryParameters['t'], isNotEmpty);
+    expect(session.loaded.single.imageUrl, contains('192.168.1.10'));
     model.dispose();
   });
 
@@ -170,7 +235,11 @@ void main() {
     session.updateDuration(const Duration(minutes: 3));
     session.updatePosition(const Duration(minutes: 3) - const Duration(seconds: 2));
     session.stateMachine.transitionTo(SessionState.idle);
-    await Future<void>.delayed(Duration.zero);
+    // The cast path fetches lyrics before pushing the next track, so the
+    // queue advance now spans more than one microtask.
+    for (var i = 0; i < 50 && session.loaded.length < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
 
     expect(session.loaded, hasLength(2));
     expect(session.loaded.last.title, '曲目2');
@@ -183,7 +252,7 @@ void main() {
     session.updateDuration(const Duration(minutes: 3));
     session.updatePosition(const Duration(seconds: 30));
     session.stateMachine.transitionTo(SessionState.idle);
-    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
 
     expect(session.loaded, hasLength(1));
     expect(model.castState, SessionState.idle);
@@ -201,6 +270,111 @@ void main() {
     expect(model.castDevice, isNull);
     // The track that was on the renderer now plays locally.
     expect(model.player.state.value.trackId, 'id1');
+    expect(model.playback.value.trackId, 'id1');
+    model.dispose();
+  });
+
+  test('the UI playback snapshot follows the renderer, so lyrics scroll', () async {
+    final (model, session) = await build();
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+
+    expect(model.playback.value.trackId, 'id0');
+    expect(model.playback.value.title, '曲目1');
+    expect(model.playback.value.playing, isTrue);
+    // The pre-cast lyrics fetch must always settle, even when the endpoint
+    // (stubbed to 400 in widget tests) has no lyrics for the track.
+    expect(model.lyricsLoading, isFalse);
+
+    session.updateDuration(const Duration(minutes: 3));
+    session.updatePosition(const Duration(seconds: 42));
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    expect(model.playback.value.position, const Duration(seconds: 42));
+    expect(model.playback.value.duration, const Duration(minutes: 3));
+
+    session.stateMachine.transitionTo(SessionState.paused);
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    expect(model.playback.value.playing, isFalse);
+
+    await model.next();
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    expect(model.playback.value.trackId, 'id1');
+    expect(model.playback.value.title, '曲目2');
+    model.dispose();
+  });
+
+  test('a DLNA renderer receives the library artist and album tags', () async {
+    final bodies = <String>[];
+    final soap = DlnaHttpClient(
+      client: MockClient((request) async {
+        bodies.add(request.body);
+        return http.Response(
+          '<?xml version="1.0"?>'
+          '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+          '<s:Body/></s:Envelope>',
+          200,
+          headers: {'content-type': 'text/xml'},
+        );
+      }),
+    );
+    final client = MusicFreeClient();
+    client.restore(
+      MusicFreeSession(
+        baseUrl: Uri.parse('http://127.0.0.1:14533'),
+        token: 'token',
+        username: 'admin',
+        subsonicToken: 'subtoken',
+        clientSalt: 'salt',
+      ),
+    );
+    final model = AppModel(
+      client: client,
+      player: _FakePlayer(),
+      castSessionFactory: (device) => AudioDlnaSession(
+        device: device,
+        description: DlnaDeviceDescription(
+          friendlyName: '客厅电视',
+          udn: device.id,
+          avTransportControlUrl:
+              'http://192.168.1.50:49152/AVTransport/control',
+          locationUrl: 'http://192.168.1.50:49152/description.xml',
+        ),
+        httpClient: soap,
+      ),
+    );
+    final device = CastDevice(
+      id: 'uuid:tv',
+      name: '客厅电视',
+      protocol: CastProtocol.dlna,
+      address: InternetAddress('192.168.1.50'),
+      port: 49152,
+    );
+    await model.playFrom(
+      [
+        Track(
+          id: 'song-1',
+          title: '夜曲',
+          artists: const [Artist(id: 'a1', name: '周杰伦')],
+          album: const Album(id: 'al1', name: '十一月的萧邦'),
+          durationSeconds: 200,
+          format: 'flac',
+          coverId: 'c1',
+        ),
+      ],
+      0,
+    );
+    await model.connectCast(device);
+
+    final body = bodies.firstWhere((b) => b.contains('SetAVTransportURI'));
+    expect(body, contains('&lt;dc:creator&gt;周杰伦&lt;/dc:creator&gt;'));
+    expect(body, contains('&lt;upnp:artist role=&quot;Performer&quot;&gt;'));
+    expect(
+      body,
+      contains('&lt;upnp:album&gt;十一月的萧邦&lt;/upnp:album&gt;'),
+    );
+    expect(body, contains('getCoverArt'));
+    expect(body, contains('object.item.audioItem.musicTrack'));
+    // Disconnect stops the session's polling timer before the test ends.
+    await model.disconnectCast();
     model.dispose();
   });
 }

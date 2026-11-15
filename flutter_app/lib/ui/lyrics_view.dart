@@ -63,14 +63,14 @@ class LyricsPanel extends StatelessWidget {
           const Divider(height: 1, thickness: 1, color: Mf.border),
           Expanded(
             child: ValueListenableBuilder<PlaybackState>(
-              valueListenable: model.player.state,
+              valueListenable: model.playback,
               builder: (context, audio, _) {
                 if (model.lyricsLoading) {
                   return const Center(child: MfSpinner());
                 }
                 return LyricsBody(
                   lyrics: model.lyrics,
-                  playback: model.player.state,
+                  playback: model.playback,
                   dense: true,
                   onSeek: model.seek,
                 );

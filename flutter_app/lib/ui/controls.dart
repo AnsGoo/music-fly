@@ -384,6 +384,61 @@ class _FnIconButtonState extends State<MfIconButton> {
   }
 }
 
+/// Compact icon-only play/pause control for transport rows. A 34dp circle
+/// matches the surrounding skip buttons; there is deliberately no text label,
+/// which used to make the cast remote's primary button twice as wide as its
+/// neighbours.
+class MfPlayButton extends StatefulWidget {
+  const MfPlayButton({
+    super.key,
+    required this.playing,
+    required this.onTap,
+    this.tooltip,
+    this.size = 34,
+    this.glyph = 22,
+  });
+
+  final bool playing;
+  final VoidCallback? onTap;
+  final String? tooltip;
+  final double size;
+  final double glyph;
+
+  @override
+  State<MfPlayButton> createState() => _MfPlayButtonState();
+}
+
+class _MfPlayButtonState extends State<MfPlayButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final button = MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          width: widget.size,
+          height: widget.size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _hovered ? Mf.accentHover : Mf.accent,
+          ),
+          child: Icon(
+            widget.playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            size: widget.glyph,
+            color: Mf.cream,
+          ),
+        ),
+      ),
+    );
+    if (widget.tooltip == null) return button;
+    return Tooltip(message: widget.tooltip!, child: button);
+  }
+}
+
 /// A hairline slider. Material's Slider is a touch control (4dp groove, 20dp
 /// thumb); on a desktop window that reads as a fat pill.
 class MfScrubber extends StatefulWidget {

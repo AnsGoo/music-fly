@@ -176,7 +176,7 @@ class _SearchResults extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final result = model.homeSearch;
-    final audio = model.player.state.value;
+    final audio = model.playback.value;
     if (result.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 60),
@@ -364,7 +364,7 @@ class _TrackCardRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final audio = model.player.state.value;
+    final audio = model.playback.value;
     // Cover cards are square plus a caption block, so the row grows with the
     // card width (which itself fills the row on touch devices).
     return LayoutBuilder(

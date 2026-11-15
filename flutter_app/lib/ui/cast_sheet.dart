@@ -296,31 +296,11 @@ class _CastRemote extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         const _CastProgress(),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            MfIconButton(
-              icon: Icons.skip_previous_rounded,
-              size: 34,
-              glyph: 22,
-              tooltip: '上一首',
-              onTap: model.previous,
-            ),
-            const SizedBox(width: 10),
-            MfPrimaryButton(
-              label: playing ? '暂停' : '播放',
-              icon: playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-              onTap: model.togglePlay,
-            ),
-            const SizedBox(width: 10),
-            MfIconButton(
-              icon: Icons.skip_next_rounded,
-              size: 34,
-              glyph: 22,
-              tooltip: '下一首',
-              onTap: model.next,
-            ),
-          ],
+        CastTransportControls(
+          playing: playing,
+          onToggle: model.togglePlay,
+          onPrevious: model.previous,
+          onNext: model.next,
         ),
         const SizedBox(height: 6),
         Row(
@@ -336,6 +316,54 @@ class _CastRemote extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Icon-only transport row for the remote. Every button is the same 34dp
+/// size — the play/pause control used to be a filled icon+label pill, which
+/// looked oversized next to the skip buttons.
+class CastTransportControls extends StatelessWidget {
+  const CastTransportControls({
+    super.key,
+    required this.playing,
+    required this.onToggle,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final bool playing;
+  final VoidCallback onToggle;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        MfIconButton(
+          icon: Icons.skip_previous_rounded,
+          size: 34,
+          glyph: 22,
+          tooltip: '上一首',
+          onTap: onPrevious,
+        ),
+        const SizedBox(width: 10),
+        MfPlayButton(
+          playing: playing,
+          tooltip: playing ? '暂停' : '播放',
+          onTap: onToggle,
+        ),
+        const SizedBox(width: 10),
+        MfIconButton(
+          icon: Icons.skip_next_rounded,
+          size: 34,
+          glyph: 22,
+          tooltip: '下一首',
+          onTap: onNext,
         ),
       ],
     );

@@ -7,11 +7,16 @@
 - 后端在隔壁 `~/Documents/code/music-free/backend`（Go/Gin，localhost:14533，admin/admin），服务端由用户自己启动，不要代启。
 - 验证视觉用临时 golden 渲染（Arial Unicode 字体 + RepaintBoundary.toImage），核对后删除测试文件；沙箱无 screencapture 权限。
 - **用户偏好：界面提示要少**。登录页一次只显示一条状态条（error 优先于 relogin notice），不要堆叠多个带框提示；所有长文本必须 `maxLines` + `overflow: TextOverflow.ellipsis`；说明文字用 `Mf.muted` 而不是几乎看不清的 `Mf.faint`。重登时第二步的「已连接」摘要要隐藏，只留「重新连接」。
+- **用户偏好：播放/暂停一律用 34dp 纯图标按钮，不要「图标+文字」的橙色胶囊**（2026-11-15 反馈投屏面板按钮太大）：统一控件 `MfPlayButton`（22dp glyph、hover 提亮、tooltip 保留文字但不常显）；桌面播放条与投屏遥控面板共用，遥控面板控制行抽成 `CastTransportControls`，与上一首/下一首的 `MfIconButton(34)` 严格同尺寸。
 
 ## 关键技术事实
 
 - Subsonic 认证必须 token（md5(password+salt)），`p=` 会被后端拒（code 50）。
-- 流播放：只有 wma/ape 等系统解不了的格式才走 `format=mp3` 转码（chunked、无 Range、无时长），其余直传（206 + Content-Length）；直传才有进度条拖动与真实时长。
+- 流播放：只有 wma/ape 等系统解不了的格式才走 `format=mp3` 转码（chunked、无 Range、无时长），其余直传（206 + Content-Length）；直传才有进度条拖动与真实时长。**这仅适用于本机播放，DLNA 投屏另走一套规则**（见下）。
+- **DLNA 投屏（2026-11-15）**：`dart_cast` 的 `DlnaSoapBuilder` 把 DIDL 硬编码成 `object.item.videoItem`，电视会把音乐交给视频管线报「播放器异常」→ `AudioDlnaSession` 自建音频 DIDL（`musicTrack` + albumArtURI + 双重 XML 转义）。投屏 URL 由 `MusicFreeClient.castStreamUrl` 生成，host 必须从 `allAddresses` 挑纯 LAN 裸 IP（排除 `/app/` 网关、relay 域名、loopback，否则电视缺 fnOS token/relay Cookie 而 401）；非 MP3 一律走后端 DLNA 转码直链 `format=mp3&estimateContentLength=true&dlna=true`（后端 `serveTranscodedDLNA` 落临时文件 + `http.ServeContent`，Vewd 栈才有 Content-Length/Range/时长），protocolInfo 与后端 `didl.go` 一致用 `OP=00;CI=1`；MP3 才直传（`OP=01;CI=0`）。本地播放的 `needsTranscode` 不要拿来判定投屏。
+- **DLNA 元数据/歌词（2026-11-15 第二轮）**：自建 DIDL 必须同时给 `dc:creator` + `upnp:artist role="Performer"` + `upnp:album`（缺了电视就显示未知歌手/未知专辑），封面给两条 `albumArtURI`（含 `dlna:profileID="JPEG_TN"`）。UPnP AV **没有标准歌词属性**，只能把纯文本歌词放 `dc:description`、LRC 原文放 `dc:longDescription`，电视是否显示取决于接收端。`_castToSession` 必须在推 SetAVTransportURI **之前**取歌词（一次 DIDL 不能后补），用 `structuredLyrics(retryable: false)` + 1s 超时，避免可选元数据拖起播或触发全局重登。App 端歌词/进度条/唱片/列表高亮统一读 `AppModel.playback`（本地镜像 `player.state`，投屏时由 cast session 的 position/state 流驱动），不要再直接绑 `player.state`；该 notifier 必须在整个 local↔cast 切换过程中保持同一个实例。
+- **热重载陷阱（2026-11-15）**：`State` 里不要用 `late final` 缓存 `AppModel` 的 notifier 并在 `initState` 赋值——Hot Reload 保留 State 却不重跑 initState，读新字段必抛 `LateInitializationError: Field '_playback@...'`。`player_bar.dart` / `now_playing.dart` 已改为可空 `_playback?` + `_bindPlayback()`，在 `didChangeDependencies` 与 `reassemble` 两处重绑（identical 去重），dispose/监听回调一律空安全。新增 State 字段照此办理。
+- **测试约定**：`cast_test.dart` 这类含真实异步与 AppModel 探测 timer 的文件只放 `test()`；混入 `testWidgets` 会因 FakeAsync 时钟不推进而永久挂起（`tester.runAsync` 也救不回）。需要测 UI 时把控件抽成纯参数 widget（如 `CastTransportControls`），在独立文件里 `testWidgets`。
 - `just_audio` 的 `durationStream` 可能发 0，`player.dart` 已加 guard 忽略 ≤0，防止覆盖元数据时长。
 - `cached_network_image` 不走自定义 http client → 已用全局 `HttpOverrides`（私有地址 DIRECT）解决。
 - 沙箱内 `flutter test` 会因 HTTP_PROXY 报 "Invalid WebSocket upgrade request"，必须绕代理跑。

@@ -32,7 +32,7 @@ class _DetailViewState extends State<DetailView> {
   Widget build(BuildContext context) {
     final model = context.watch<AppModel>();
     final detail = widget.detail;
-    final audio = model.player.state.value;
+    final audio = model.playback.value;
     return Column(
       children: [
         Padding(

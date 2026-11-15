@@ -277,7 +277,7 @@ class _Body extends StatelessWidget {
       footer: model.canLoadMore || model.loadingMore,
       builder: (context, index) {
         final track = tracks[index];
-        final audio = model.player.state.value;
+        final audio = model.playback.value;
         return TrackRow(
           track: track,
           index: index,

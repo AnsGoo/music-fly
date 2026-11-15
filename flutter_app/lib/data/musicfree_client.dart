@@ -485,9 +485,17 @@ class MusicFreeClient {
   /// OpenSubsonic structured lyrics, the endpoint the web player uses.
   /// The server answers from its lyrics store first, then the file tags, and
   /// reports per-line timestamps for synced content.
-  Future<Lyrics?> structuredLyrics(String trackId) async {
+  ///
+  /// [retryable] is false for the cast handover: lyrics are optional metadata
+  /// and must not pull the global re-login / address sweep into the critical
+  /// path that pushes SetAVTransportURI to the TV.
+  Future<Lyrics?> structuredLyrics(String trackId, {bool retryable = true}) async {
     try {
-      final root = await _get('rest/getLyricsBySongId.view', {'id': trackId});
+      final root = await _getWith(
+        'rest/getLyricsBySongId.view',
+        {'id': trackId},
+        retryable: retryable,
+      );
       final list = _list(root['lyricsList'], 'structuredLyrics');
       if (list.isEmpty) return null;
       final first = list.first;
@@ -536,6 +544,31 @@ class MusicFreeClient {
     return _mediaUrl('rest/stream', params);
   }
 
+  /// Direct stream URL handed to a DLNA renderer.
+  ///
+  /// The renderer fetches this URL *itself*, so two things differ from the
+  /// in-app [streamUrl]:
+  ///  * The host must be a plain LAN endpoint. Gateway (`/app/...`) and relay
+  ///    links need injected fnOS identity headers / cookies that a TV never
+  ///    sends, and loopback would point back at the TV. FNID keeps the whole
+  ///    candidate pool in the session, so a LAN link is usually available even
+  ///    when the app itself is currently on a WAN link.
+  ///  * Non-MP3 files use the backend's DLNA transcode route: it writes a
+  ///    complete MP3 (Info/Xing header) before `http.ServeContent` answers,
+  ///    giving strict renderers (TCL/Hisense Vewd stacks) a real
+  ///    Content-Length, byte ranges and a correct total duration. Feeding them
+  ///    a raw FLAC/M4A body labeled as MP3 makes the TV's player bail out.
+  /// Both routes are still direct links — no proxy on this device is involved.
+  String castStreamUrl(String trackId, {required bool dlnaTranscode}) {
+    final params = <String, String>{'id': trackId};
+    if (dlnaTranscode) {
+      params['format'] = 'mp3';
+      params['estimateContentLength'] = 'true';
+      params['dlna'] = 'true';
+    }
+    return _mediaUrl('rest/stream', params, base: _lanReachableBase());
+  }
+
   String? coverUrl(String? coverId, {int size = 320}) {
     if (coverId == null || coverId.isEmpty) return null;
     try {
@@ -545,7 +578,57 @@ class MusicFreeClient {
     }
   }
 
-  String _mediaUrl(String path, Map<String, String> params) {
+  /// Album art for the renderer's Now Playing screen, on the same LAN host as
+  /// [castStreamUrl] so the TV does not hit a gateway that would answer 401.
+  String? castCoverUrl(String? coverId, {int size = 320}) {
+    if (coverId == null || coverId.isEmpty) return null;
+    try {
+      return _mediaUrl(
+        'rest/getCoverArt',
+        {'id': coverId, 'size': '$size'},
+        base: _lanReachableBase(),
+      );
+    } on MusicFreeException {
+      return null;
+    }
+  }
+
+  /// Picks an endpoint a renderer on the local network can reach. Falls back
+  /// to the active address when the pool has no plain LAN link (e.g. a WAN-only
+  /// session), which is still better than an unresolvable phone-local URL.
+  Uri _lanReachableBase() {
+    final active = _session!;
+    if (_isLanEndpoint(active.baseUrl)) return active.baseUrl;
+    for (final address in active.allAddresses) {
+      if (_isLanEndpoint(address)) return address;
+    }
+    return active.baseUrl;
+  }
+
+  static bool _isLanEndpoint(Uri uri) {
+    // Gateway links rewrite the path and require injected NAS identity; a
+    // renderer cannot reproduce those headers.
+    if (uri.pathSegments.any((segment) => segment.isNotEmpty)) return false;
+    final host = uri.host;
+    if (host == 'localhost' || host == '127.0.0.1' || host == '::1') {
+      return false;
+    }
+    final parts = host.split('.');
+    if (parts.length != 4) return false;
+    final octets = <int>[];
+    for (final part in parts) {
+      final value = int.tryParse(part);
+      if (value == null || value < 0 || value > 255) return false;
+      octets.add(value);
+    }
+    final first = octets[0];
+    final second = octets[1];
+    return first == 10 ||
+        (first == 172 && second >= 16 && second <= 31) ||
+        (first == 192 && second == 168);
+  }
+
+  String _mediaUrl(String path, Map<String, String> params, {Uri? base}) {
     final active = _session;
     if (active == null) throw AuthException('尚未登录');
     final query = <String, String>{'v': '1.16.1', 'c': 'MusicFly', ...params};
@@ -554,7 +637,7 @@ class MusicFreeClient {
       query['t'] = _md5('${active.subsonicToken}${active.clientSalt}');
       query['s'] = active.clientSalt;
     }
-    return _uri(active.baseUrl, path, query).toString();
+    return _uri(base ?? active.baseUrl, path, query).toString();
   }
 
   // ---- Transport ----------------------------------------------------------
@@ -562,7 +645,13 @@ class MusicFreeClient {
   Future<Map<String, dynamic>> _get(
     String path, [
     Map<String, String> params = const {},
-  ]) async {
+  ]) => _getWith(path, params, retryable: true);
+
+  Future<Map<String, dynamic>> _getWith(
+    String path,
+    Map<String, String> params, {
+    required bool retryable,
+  }) async {
     if (_session == null) throw AuthException('尚未登录');
     // The request is built *inside* the closure on purpose: after a failover
     // sweep the host may have changed [baseUrl], so a replay has to resolve
@@ -576,7 +665,7 @@ class MusicFreeClient {
         ...params,
       });
       return _http.get(uri, headers: _headers());
-    });
+    }, retryable: retryable);
   }
 
   Future<Map<String, dynamic>> _post(

@@ -48,7 +48,10 @@ class _FakePlayer extends MfPlayer {
 /// Keeps widget tests off the network: every track load preloads lyrics.
 class _OfflineClient extends MusicFreeClient {
   @override
-  Future<Lyrics?> structuredLyrics(String trackId) async => null;
+  Future<Lyrics?> structuredLyrics(
+    String trackId, {
+    bool retryable = true,
+  }) async => null;
 }
 
 AppModel _model(_FakePlayer player) {

@@ -26,8 +26,11 @@ class _PlayerBarState extends State<PlayerBar>
     with SingleTickerProviderStateMixin {
   double? _scrubSeconds;
 
-  /// Captured in [initState]: `dispose` must not look the provider up again.
-  late final MfPlayer _player;
+  /// Never `late`: hot reload keeps this State alive without re-running
+  /// [initState], so a late field added in a newer build would be read before
+  /// it is initialised (`LateInitializationError`). Rebound on dependency
+  /// change and on reassemble instead.
+  ValueNotifier<PlaybackState>? _playback;
 
   /// The cover turns like a record while audio advances, mirroring the web
   /// transport. It keeps its angle when paused.
@@ -37,22 +40,35 @@ class _PlayerBarState extends State<PlayerBar>
   );
 
   @override
-  void initState() {
-    super.initState();
-    _player = context.read<AppModel>().player;
-    _player.state.addListener(_syncSpin);
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _bindPlayback(context.read<AppModel>().playback);
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    // Hot reload: reattach to the (possibly recreated) model's notifier.
+    _bindPlayback(context.read<AppModel>().playback);
+  }
+
+  void _bindPlayback(ValueNotifier<PlaybackState> notifier) {
+    if (identical(_playback, notifier)) return;
+    _playback?.removeListener(_syncSpin);
+    _playback = notifier;
+    notifier.addListener(_syncSpin);
     _syncSpin();
   }
 
   @override
   void dispose() {
-    _player.state.removeListener(_syncSpin);
+    _playback?.removeListener(_syncSpin);
     _spin.dispose();
     super.dispose();
   }
 
   void _syncSpin() {
-    final playing = _player.state.value.playing;
+    final playing = _playback?.value.playing ?? false;
     if (playing && !_spin.isAnimating) {
       _spin.repeat();
     } else if (!playing && _spin.isAnimating) {
@@ -64,7 +80,7 @@ class _PlayerBarState extends State<PlayerBar>
   Widget build(BuildContext context) {
     final model = context.watch<AppModel>();
     return ValueListenableBuilder<PlaybackState>(
-      valueListenable: model.player.state,
+      valueListenable: model.playback,
       builder: (context, audio, _) {
         if (!audio.hasTrack) {
           return const SizedBox.shrink();
@@ -427,25 +443,11 @@ class _PlayerBarState extends State<PlayerBar>
     );
   }
 
-  Widget _playButton(AppModel model, PlaybackState audio) {
-    final playing = audio.playing;
-    return GestureDetector(
-      onTap: model.togglePlay,
-      child: Container(
-        width: 34,
-        height: 34,
-        decoration: const BoxDecoration(
-          shape: BoxShape.circle,
-          color: Mf.accent,
-        ),
-        child: Icon(
-          playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-          size: 22,
-          color: Mf.cream,
-        ),
-      ),
-    );
-  }
+  Widget _playButton(AppModel model, PlaybackState audio) => MfPlayButton(
+    playing: audio.playing,
+    tooltip: audio.playing ? '暂停' : '播放',
+    onTap: model.togglePlay,
+  );
 }
 
 /// Heart toggle for the transport: filled accent when the current song is
