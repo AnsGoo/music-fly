@@ -150,6 +150,12 @@ class AppModel extends ChangeNotifier {
   final SessionFactory? _castSessionFactory;
 
   MusicFreeSession? _session;
+
+  /// Whether the last (possibly logged-out) session came from Fn Connect.
+  /// Kept in memory so a manual logout reopens the FNID tab — that is the
+  /// path to signing in as a different Music Free account.
+  bool _lastFnConnect = false;
+
   bool _connecting = false;
   String? _error;
 
@@ -313,6 +319,12 @@ class AppModel extends ChangeNotifier {
   // ---- Getters ------------------------------------------------------------
 
   MusicFreeSession? get session => _session;
+
+  /// The login page opens on the FNID tab when the current (or just logged
+  /// out) session was established through Fn Connect.
+  bool get preferFnConnectTab =>
+      _lastFnConnect || (_session?.fnConnect ?? false);
+
   bool get connecting => _connecting;
   String? get error => _error;
   ServerInfo? get serverInfo => _serverInfo;
@@ -502,6 +514,8 @@ class AppModel extends ChangeNotifier {
     }
     client.restore(saved);
     _session = saved;
+    _lastFnConnect =
+        saved.fnConnect || looksLikeFnAddressPool(saved.allAddresses);
     _booting = false;
     notifyListeners();
     _startAddressProbe();
@@ -522,6 +536,7 @@ class AppModel extends ChangeNotifier {
       final active = await client.login(rawUrl, username, password);
       await _store.save(active);
       _session = active;
+      _lastFnConnect = false;
       _startAddressProbe();
       await select(Section.home);
     } on MusicFreeException catch (failure) {
@@ -626,19 +641,28 @@ class AppModel extends ChangeNotifier {
   bool _fnViaNas = false;
   bool get fnViaNas => _fnViaNas;
 
-  /// True when the resolved address is a fnOS unified-gateway link, where the
-  /// backend can sign the user in from the trusted NAS identity without a
-  /// Music Free password (first use still needs one explicit binding).
-  bool get fnGatewayLoginAvailable {
-    final best = _fnProbe?.best;
-    return best != null && isFnGatewayPath(best.toString());
-  }
-
+  /// True once step 1 found an address. Step 2 always asks for the Music Free
+  /// credentials — even on a unified-gateway link, where the backend could
+  /// otherwise sign in a *bound default account* without asking. Letting the
+  /// user type the account on every sign-in is the only way to change it.
   bool get fnPrepared => _fnProbe?.best != null;
   FnProbeResult? get fnProbe => _fnProbe;
 
   /// Number of FN endpoints that will be persisted for LAN / WAN failover.
   int get fnAddressCount => _fnAddressPool.length;
+
+  /// Test hook: inject a completed step-1 probe without calling FN's broker,
+  /// so the "credentials are mandatory" rule in [loginFnPrepared] can be
+  /// exercised in isolation.
+  @visibleForTesting
+  void setFnProbeForTest(
+    FnProbeResult probe, {
+    List<Uri> addresses = const [],
+  }) {
+    _fnProbe = probe;
+    _fnAddressPool = addresses;
+    notifyListeners();
+  }
 
   /// Clears the step-1 result so the login page goes back to the NAS form.
   void resetFnConnect() {
@@ -676,7 +700,9 @@ class AppModel extends ChangeNotifier {
   /// working LAN login is never blocked.
   ///
   /// The outcome is stored in [fnProbe]; sign-in itself happens in step 2
-  /// ([loginFnPrepared]).
+  /// ([loginFnPrepared]). This step never signs in on its own: a gateway
+  /// shortcut here would log the user straight into a previously bound
+  /// account with no way to choose a different one.
   ///
   /// [nasTwoFaCode] is only needed when the NAS account has two-step
   /// verification enabled; without it the call fails with a message asking
@@ -754,9 +780,7 @@ class AppModel extends ChangeNotifier {
               );
         _fnAddressPool = [for (final candidate in pool) candidate.address];
         _fnProbe = directProbe;
-        // The binding may already exist — try the passwordless gateway
-        // sign-in before showing the step-2 credentials form.
-        await _tryAutoGatewayLogin();
+        // Step 2 shows the credentials form; never sign in automatically.
         return;
       }
 
@@ -803,9 +827,8 @@ class AppModel extends ChangeNotifier {
       // Remember the NAS account that unlocked these remote links so they keep
       // working after a token expiry / network change without re-entering it.
       await saveFnOsCredentials(username, password);
-      // Same shortcut here: with the fnOS session just minted, an existing
-      // NAS → Music Free binding signs the user straight into the app.
-      await _tryAutoGatewayLogin();
+      // Even with a freshly minted fnOS session, step 2 must ask for the
+      // Music Free account: no passwordless gateway sign-in here.
     } on FnConnectException catch (failure) {
       _error = failure.message;
     } on FnOsException catch (failure) {
@@ -878,7 +901,10 @@ class AppModel extends ChangeNotifier {
   }
 
   /// Step 2 of the Fn Connect sign-in: sign in to the Music Free backend
-  /// through the endpoint probed in step 1. The **whole** FN link pool —
+  /// through the endpoint probed in step 1, **always** with the credentials
+  /// typed by the user. A gateway link must not take its passwordless
+  /// shortcut here — that logs into a previously bound default account and
+  /// silently ignores whatever the user entered. The **whole** FN link pool —
   /// including links unreachable from the current network — is kept as an
   /// *internal* failover pool, so the prober can hop between LAN / WAN /
   /// gateway / relay when the device changes networks. The session is flagged
@@ -898,11 +924,7 @@ class AppModel extends ChangeNotifier {
     if (_connecting) return;
     final user = username?.trim() ?? '';
     final pass = password ?? '';
-    final address = best.toString();
-    // Only gateway links carry the NAS identity that makes passwordless
-    // login possible; direct TCP / relay links always need app credentials.
-    final gateway = isFnGatewayPath(address);
-    if (!gateway && (user.isEmpty || pass.isEmpty)) {
+    if (user.isEmpty || pass.isEmpty) {
       _error = '请填写 Music Free 账号和密码';
       notifyListeners();
       return;
@@ -911,31 +933,11 @@ class AppModel extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      late final MusicFreeSession active;
-      if (gateway) {
-        try {
-          active = await client.gatewayLogin(address);
-        } on GatewayBindRequiredException {
-          // First time on this NAS: bind once with app credentials, then the
-          // backend issues the session and remembers the mapping.
-          if (user.isEmpty || pass.isEmpty) {
-            throw MusicFreeException(
-              '首次使用需绑定 Music Free 账号，请填写应用账号和密码完成一次绑定',
-            );
-          }
-          active = await client.gatewayBind(address, user, pass);
-        } catch (_) {
-          // Older backends (or a gateway without X-Trim-* headers) do not
-          // expose gateway-login; fall back to a normal password sign-in on
-          // the very same address.
-          if (user.isEmpty || pass.isEmpty) {
-            throw MusicFreeException('请填写 Music Free 账号和密码');
-          }
-          active = await client.login(address, user, pass);
-        }
-      } else {
-        active = await client.login(address, user, pass);
-      }
+      final active = await client.loginFnAddress(
+        best.toString(),
+        user,
+        pass,
+      );
       await _completeFnLogin(active);
     } on MusicFreeException catch (failure) {
       _error = failure.message;
@@ -961,38 +963,9 @@ class AppModel extends ChangeNotifier {
     client.restore(session);
     await _store.save(session);
     _session = session;
+    _lastFnConnect = true;
     _startAddressProbe();
     await select(Section.home);
-  }
-
-  /// Tries the passwordless gateway sign-in right after the FNID probe
-  /// succeeded. The backend maps the gateway's trusted NAS identity to the
-  /// bound Music Free account ([GatewayBindRequiredException] when the
-  /// binding does not exist yet), so an already-bound user skips the step-2
-  /// credentials form entirely and lands straight in the app.
-  ///
-  /// Every failure is swallowed on purpose — no binding yet, a stale fnOS
-  /// session token, an old backend without the endpoint, TLS trouble on the
-  /// LAN portal — and the manual step-2 flow stays exactly as before. The
-  /// gateway endpoint only answers on unified-gateway links, so each such
-  /// link in the pool (LAN portal first, then the device domain) is tried.
-  Future<void> _tryAutoGatewayLogin() async {
-    final best = _fnProbe?.best;
-    if (best == null) return;
-    if (fnGatewayToken == null || fnGatewayToken!.isEmpty) return;
-    for (final address in _fnAddressPool) {
-      if (!isFnGatewayPath(address.toString())) continue;
-      try {
-        final active = await client.gatewayLogin(address.toString());
-        // The issued JWT is valid on every link in the pool, so keep the
-        // fastest probed endpoint as the base instead of the gateway link
-        // the sign-in happened to ride on.
-        await _completeFnLogin(active.copyWith(baseUrl: best));
-        return;
-      } catch (_) {
-        client.forget();
-      }
-    }
   }
 
   // ---- Multi-address failover ----------------------------------------------
@@ -1089,8 +1062,11 @@ class AppModel extends ChangeNotifier {
 
   /// FNID unified-gateway links can mint a fresh Music Free session from the
   /// trusted NAS identity without an app password — that is what recovers a
-  /// day-old expired JWT without bothering the user. Ordinary logins have no
-  /// stored app password, so they fall through to the sign-in gate.
+  /// day-old expired JWT without bothering the user. This is *renewal*, not
+  /// sign-in: it never runs before the user has typed credentials, and the
+  /// account it restores is the one the last interactive login bound (see
+  /// [MusicFreeClient.loginFnAddress]). Ordinary logins have no stored app
+  /// password, so they fall through to the sign-in gate.
   Future<bool> _reloginSilently() async {
     final session = _session;
     if (session == null || _disposed || _relogining) return false;

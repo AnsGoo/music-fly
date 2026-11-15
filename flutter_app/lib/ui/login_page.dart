@@ -8,10 +8,11 @@
 ///   NAS form is mandatory only when none is reachable, and can be filled
 ///   optionally while on the LAN to warm up the gateway / relay tokens. Every
 ///   link FN reports is kept as a failover address, so the app keeps working
-///   when the device moves between LAN and WAN. On a unified-gateway link the
-///   backend signs the user in from the trusted NAS identity without an app
-///   password (first use binds the account once); other links use the normal
-///   Music Free sign-in.
+///   when the device moves between LAN and WAN. Step 2 *always* requires the
+///   Music Free account and password: the gateway's passwordless login is
+///   reserved for renewing an existing session, otherwise the app would sign
+///   straight into a bound default account with no way to change it. On a
+///   unified-gateway link the typed credentials also refresh that binding.
 library;
 
 import 'package:flutter/material.dart';
@@ -65,11 +66,10 @@ class _LoginPageState extends State<LoginPage> {
     super.didChangeDependencies();
     if (_modePicked) return;
     _modePicked = true;
-    // A FNID session that needs re-authentication should land on the FNID
-    // tab with its ID / NAS account already prefilled, not on the plain URL
-    // form.
-    if (widget.notice != null &&
-        context.read<AppModel>().session?.fnConnect == true) {
+    // Re-authentication and "switch account" (manual logout) should land on
+    // the FNID tab with its ID / NAS account already prefilled, not on the
+    // plain URL form. Users who signed in with a URL still start there.
+    if (context.read<AppModel>().preferFnConnectTab) {
       _mode = _LoginMode.fnConnect;
     }
   }
@@ -476,9 +476,7 @@ class _LoginPageState extends State<LoginPage> {
       ),
       const SizedBox(height: 10),
       Text(
-        model.fnGatewayLoginAvailable
-            ? '第二步 · 网关已校验身份，点「登录」即可进入；首次需填一次应用账号'
-            : '第二步 · 输入 Music Free 账号密码',
+        '第二步 · 输入 Music Free 账号密码，可更换登录账号',
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(color: Mf.muted, fontSize: 11.5, height: 1.4),

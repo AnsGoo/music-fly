@@ -39,8 +39,8 @@ class TransportException extends MusicFreeException {
 }
 
 /// The fnOS gateway knows the NAS identity but no Music Free account has been
-/// bound to it yet. The caller should ask once for the app credentials and
-/// call [MusicFreeClient.gatewayBind]; later sign-ins are passwordless.
+/// bound to it yet. Only the *session renewal* path (JWT expiry) hits this:
+/// interactive sign-ins always verify the credentials the user typed.
 class GatewayBindRequiredException extends MusicFreeException {
   GatewayBindRequiredException(super.message);
 }
@@ -138,21 +138,59 @@ class MusicFreeClient {
     return session;
   }
 
-  /// First-time binding: verifies the app credentials once, remembers the
-  /// NAS → Music Free mapping and returns a passwordless session.
+  /// Verifies the app credentials and writes (or updates) the NAS → Music
+  /// Free binding, then issues a session for that account.
+  ///
+  /// Interactive FNID sign-ins call this on *every* login, not just the first
+  /// one: rebinding is what lets the user change the account the gateway
+  /// would otherwise sign in automatically ("默认登录用户").
   Future<MusicFreeSession> gatewayBind(
     String rawUrl,
     String username,
-    String password,
-  ) async {
+    String password, {
+    bool anonymous = false,
+  }) async {
     final base = _normalize(rawUrl);
     final root = await _post('rest/api/v1/auth/gateway-bind', {
       'username': username,
       'password': password,
-    }, base: base);
+    }, base: base, anonymous: anonymous);
     final session = _sessionFromLogin(root, base, username);
     _session = session;
     return session;
+  }
+
+  /// Interactive sign-in on an address resolved by FN Connect.
+  ///
+  /// Credentials are mandatory on **every** link — there is deliberately no
+  /// passwordless gateway shortcut, so the user can always pick or change the
+  /// Music Free account. On `/app/<name>` links the credentials also refresh
+  /// the NAS binding; direct / relay links use the ordinary password login.
+  /// Backends without `gateway-bind` fall back to that same ordinary login.
+  Future<MusicFreeSession> loginFnAddress(
+    String rawUrl,
+    String username,
+    String password,
+  ) async {
+    final user = username.trim();
+    if (user.isEmpty || password.isEmpty) {
+      throw MusicFreeException('请填写 Music Free 账号和密码');
+    }
+    final address = _normalize(rawUrl).toString();
+    if (!isFnGatewayPath(address)) {
+      return login(address, user, password);
+    }
+    try {
+      // No previous JWT should ride along while replacing the binding.
+      return await gatewayBind(address, user, password, anonymous: true);
+    } on MusicFreeException {
+      // An older backend, a gateway without X-Trim-* headers, or a disabled
+      // gateway endpoint all answer with an error object that looks like an
+      // auth failure. Falling back to the ordinary sign-in on the *same*
+      // address covers those; when the credentials are simply wrong, that
+      // sign-in reports the same error itself.
+      return login(address, user, password);
+    }
   }
 
   MusicFreeSession _sessionFromLogin(
