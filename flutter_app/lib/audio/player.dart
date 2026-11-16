@@ -140,6 +140,14 @@ class MfPlayer {
   Map<String, dynamic>? _systemPayload;
   bool _systemMetadataConfirmed = false;
 
+  /// 音频是否真的开始出声。鸿蒙的 AVSession 只在播放态才稳定接受元数据，
+  /// 确认补推要等它和封面都就绪。
+  bool _playbackStarted = false;
+
+  /// 封面是否已有结论（下载成功，或确定拿不到）。没有结论前补推等于把一份
+  /// 半成品再写一遍，反而会盖掉已经显示正确的封面。
+  bool _coverResolved = false;
+
   /// 鸿蒙没有 audio_service：AVSession 的切歌命令由 ohos 插件转发到 Dart。
   /// 队列回调由 AppModel 注入；没有注入时（例如直接使用 MfPlayer 的测试）
   /// 不注册通道，避免在 binding 未初始化的环境里断言。
@@ -185,11 +193,12 @@ class MfPlayer {
         // 鸿蒙的长时任务要在真的出声之后才申请：系统会校验 AVSession 是否
         // 处于播放态，提前申请会被判成「没有在放音频」而拒掉。
         if (playing) unawaited(BackgroundAudioTask.ensureRunning());
-        // 会话此刻一定已激活，补推一次当前曲目，纠正首次推送早于会话创建的
-        // 时序问题（其它平台会抛 MissingPluginException，静默忽略）。
-        if (playing && !_systemMetadataConfirmed) {
-          _systemMetadataConfirmed = true;
-          unawaited(_repushSystemMetadata(_metadataGeneration));
+        // 会话此刻一定已激活，等封面也定局后补推一次完整曲目，纠正首次推送
+        // 早于会话创建的时序问题（其它平台会抛 MissingPluginException，静默
+        // 忽略）。
+        if (playing) {
+          _playbackStarted = true;
+          _maybeConfirmSystemMetadata();
         }
         if (finished) onCompleted?.call();
       }),
@@ -289,6 +298,8 @@ class MfPlayer {
     _stopClock();
     final generation = ++_metadataGeneration;
     _systemMetadataConfirmed = false;
+    _playbackStarted = false;
+    _coverResolved = false;
     state.value = PlaybackState(
       trackId: trackId,
       title: title,
@@ -348,7 +359,14 @@ class MfPlayer {
     final payload = <String, dynamic>{
       'title': title,
       'artist': artist ?? '',
-      'artUri': coverUrl ?? '',
+      // 需要鉴权的封面（飞牛网关 / relay）不要交给系统去取：它没有那些
+      // Authorization / Cookie，只会拿到 401。而锁屏卡片在取不到新图时
+      // 会把上一首的封面留在原位，看起来就是「歌名是这首、封面是上一首」。
+      // 空串是合法兜底值（undefined 会让整次 setAVMetadata 报 401），
+      // 真正的图随后由 App 下载字节补推。
+      'artUri': coverUrl != null && fnRelayHeadersFor(coverUrl) == null
+          ? coverUrl
+          : '',
       'durationMs': duration?.inMilliseconds ?? 0,
       // 稳定曲目标识：同一首歌的多次推送共用一个 AVSession assetId。
       'trackId': trackId,
@@ -368,7 +386,10 @@ class MfPlayer {
     if (generation != _metadataGeneration) return;
     final bytes = await _artwork.load(coverUrl);
     // 下载期间用户可能已经切歌，迟到的封面不能盖到新歌上。
-    if (bytes == null || generation != _metadataGeneration) return;
+    if (bytes == null || generation != _metadataGeneration) {
+      _markCoverResolved(generation);
+      return;
+    }
     final withArtwork = <String, dynamic>{
       ...payload,
       // StandardMessageCodec：Uint8List → ArkTS Uint8Array / ArrayBuffer。
@@ -380,6 +401,28 @@ class MfPlayer {
     } catch (_) {
       // 封面补推失败不影响播放，歌名/时长第一次调用时已生效。
     }
+    _markCoverResolved(generation);
+  }
+
+  /// 封面有了结论（拿到了字节，或确定拿不到）。必须带 generation：慢一拍的
+  /// 回调不能替新歌宣布「封面已定局」，否则补推会提前发一份没有封面的数据。
+  void _markCoverResolved(int generation) {
+    if (generation != _metadataGeneration) return;
+    _coverResolved = true;
+    _maybeConfirmSystemMetadata();
+  }
+
+  /// 曲目信息「完整」之后（已经开始出声 + 封面确定）再补推一次。
+  ///
+  /// 之前是播放一开始就补推，那时封面往往还没下载完，等于把一份不带封面的
+  /// 快照又写了一遍；鸿蒙的 AVSession 在会话降级 / 解码慢时可能只应用一部分
+  /// 字段，锁屏就停在「封面是上一首、歌名是这一首」这种半新半旧的状态。
+  /// 现在把这次确认推迟到封面定局，推的必然是一份自洽的完整数据。
+  void _maybeConfirmSystemMetadata() {
+    if (_systemMetadataConfirmed) return;
+    if (!_playbackStarted || !_coverResolved) return;
+    _systemMetadataConfirmed = true;
+    unawaited(_repushSystemMetadata(_metadataGeneration));
   }
 
   /// 播放真正开始后补推一次。鸿蒙的 AVSession 由插件异步创建，会话就绪前
@@ -453,6 +496,8 @@ class MfPlayer {
     _metadataGeneration++;
     _systemPayload = null;
     _systemMetadataConfirmed = false;
+    _playbackStarted = false;
+    _coverResolved = false;
     await _engine?.stop();
     state.value = const PlaybackState();
     // Nothing is loaded any more, so the HarmonyOS long-running task would just

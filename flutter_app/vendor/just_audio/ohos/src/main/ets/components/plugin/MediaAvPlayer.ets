@@ -145,6 +145,10 @@ export class MfAvMetadata {
   assetId: string = '';
   revision: number = 0;
   artwork?: image.PixelMap;
+  /// [artwork] 属于哪一首（= 解码那一刻的 assetId）。封面解码是异步的，
+  /// 卡在 await 上的旧图可能在切歌之后才落地；带上归属后，写入面板前就能
+  /// 拦住「上一首的封面 + 这一首的歌名」这种错配。
+  artworkAssetId: string = '';
   /// 串行化 AVSession.setAVMetadata：异步回调（尤其失败后的 fallback）不能
   /// 把上一首的歌名写回到新歌上。
   writeChain: Promise<void> = Promise.resolve();
@@ -739,20 +743,27 @@ export class MediaAvPlayer {
   public setSessionMetadata(title?: string, artist?: string, artUri?: string, durationMs?: number,
     artwork?: Uint8Array, trackId?: string) {
     const snapshot = mfMetadata();
-    snapshot.title = title ?? '';
-    snapshot.artist = artist ?? '';
+    const nextTitle = title ?? '';
+    const nextArtist = artist ?? '';
+    // 与 setAVMetadata 用同一套规则，换曲判定才能对齐。
+    const assetId = (trackId !== undefined && trackId.length > 0)
+      ? trackId : `${nextTitle}|${nextArtist}`;
+    const sameTrack = assetId.length > 0 && snapshot.assetId === assetId;
+    snapshot.title = nextTitle;
+    snapshot.artist = nextArtist;
     snapshot.artUri = artUri ?? '';
     snapshot.durationMs = durationMs ?? 0;
     // 同一首歌的所有推送（含封面补推、播放开始后的重推）共用一个 assetId。
-    snapshot.assetId = (trackId !== undefined && trackId.length > 0)
-      ? trackId : `${snapshot.title}|${snapshot.artist}`;
+    snapshot.assetId = assetId;
     snapshot.revision++;
     this.dartTitle = snapshot.title;
     this.artworkToken++;
     if (artwork && artwork.length > 0) {
-      this.decodeArtwork(artwork, this.artworkToken);
-    } else {
+      this.decodeArtwork(artwork, this.artworkToken, assetId);
+    } else if (!sameTrack) {
       // 切歌时 App 会先推一次不带封面的元数据，先撤掉上一首的图避免串台。
+      // 同一首歌的重推（封面还在路上）不能清空已经解好的图，否则面板会闪
+      // 回可能取不到的 artUri。
       this.releaseArtwork();
     }
     // 会话尚未就绪也要走一遍：全局快照已更新，createSession 完成后会补写。
@@ -763,6 +774,7 @@ export class MediaAvPlayer {
     const snapshot = mfMetadata();
     const old = snapshot.artwork;
     snapshot.artwork = undefined;
+    snapshot.artworkAssetId = '';
     if (old) {
       try {
         await old.release();
@@ -772,7 +784,28 @@ export class MediaAvPlayer {
     }
   }
 
-  private async decodeArtwork(bytes: Uint8Array, token: number) {
+  /// 这张封面此刻还该不该写进锁屏。解码 / 释放都要 await，每次 await 之后
+  /// 现场都可能已经换了曲目甚至换了播放器实例，必须重新校验：
+  /// 1. 当前仍是活跃实例（热重启 / 重新登录会造出第二个 MediaAvPlayer）；
+  /// 2. 期间没有新的推送（artworkToken 变了说明已被覆盖）；
+  /// 3. 全局快照的 assetId 仍是这张封面所属的曲目。
+  /// 只做第一道校验时，慢一拍的旧封面会落进新歌的快照，锁屏就出现
+  /// 「封面是上一首、歌名是这一首」——正是那个「偶发、无法稳定复现」的错配。
+  private artworkStillWanted(token: number, assetId: string): boolean {
+    const active = AppStorage.get(MF_ACTIVE_PLAYER_KEY) as MediaAvPlayer | undefined;
+    if (active !== undefined && active !== this) {
+      return false;
+    }
+    if (token !== this.artworkToken) {
+      return false;
+    }
+    if (assetId.length > 0 && mfMetadata().assetId !== assetId) {
+      return false;
+    }
+    return true;
+  }
+
+  private async decodeArtwork(bytes: Uint8Array, token: number, assetId: string) {
     try {
       // codec 传来的 Uint8Array 可能是共享缓冲区的一个视图，拷成独立的
       // ArrayBuffer 再交给 ImageKit，避免把多余的字节当成图片内容。
@@ -785,13 +818,19 @@ export class MediaAvPlayer {
       };
       const pixelMap = await source.createPixelMap(options);
       // ImageSource 由内存缓冲区创建，不持有 fd，交给 GC 回收即可。
-      if (token !== this.artworkToken) {
+      if (!this.artworkStillWanted(token, assetId)) {
         await pixelMap.release();
         return;
       }
+      // releaseArtwork 也是异步的：清旧图期间用户照样能切歌，落地前再验一次。
       await this.releaseArtwork();
+      if (!this.artworkStillWanted(token, assetId)) {
+        await pixelMap.release();
+        return;
+      }
       const snapshot = mfMetadata();
       snapshot.artwork = pixelMap;
+      snapshot.artworkAssetId = assetId;
       snapshot.revision++;
       this.setAVMetadata();
     } catch (error) {
@@ -822,16 +861,20 @@ export class MediaAvPlayer {
       let duration = snapshot.durationMs > 0 ? snapshot.durationMs : Math.max(0, this.getDuration());
       // 优先用 App 解码好的 PixelMap；没有时才退回 URL（普通局域网服务器
       // 的封面不需要鉴权，系统自己就能取到）。空串是合法兜底值。
+      // 封面必须属于当前这首：解码是异步的，别的曲目的图绝不能借用。
+      const artwork = (snapshot.artwork !== undefined &&
+        (snapshot.artworkAssetId.length === 0 || snapshot.artworkAssetId === snapshot.assetId))
+        ? snapshot.artwork : undefined;
       let mediaImage: string | image.PixelMap = snapshot.artUri;
-      if (snapshot.artwork) {
-        mediaImage = snapshot.artwork;
+      if (artwork) {
+        mediaImage = artwork;
       }
       // assetId 按曲目固定：同曲多次推送（封面、播放开始后重推）不改标识，
       // 换曲才变。以前每次推送都用 mf-${revision}，系统在锁屏卡片上可能一直
       // 绑定第一次创建的那个媒体项，后面写进去的新歌名根本不显示。
       const assetId = snapshot.assetId.length > 0 ? snapshot.assetId : `mf-${title}|${artist}`;
       console.info(TAG,
-        `setAVMetadata: rev=${revision}, final=${title}, assetId=${assetId}, hasArtwork=${snapshot.artwork !== undefined}`);
+        `setAVMetadata: rev=${revision}, final=${title}, assetId=${assetId}, hasArtwork=${artwork !== undefined}`);
       let metadata: avSession.AVMetadata = {
         assetId: assetId,
         title: title,

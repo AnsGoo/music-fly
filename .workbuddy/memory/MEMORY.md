@@ -1,56 +1,52 @@
 # MusicFly（乐记）项目约定
 
+Flutter App 在 `flutter_app/`，后端 `~/Documents/code/music-free/backend`（Go/Gin，localhost:14533，admin/admin，用户自己启动）。
+
 ## 工作流偏好
 
-- **不要每次改动后打包 DMG/APK**。用户在 VS Code 里用 launch 调试，支持热更新（hot reload）。改完代码验证手段：`flutter analyze` + `flutter test`（绕代理：`env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY NO_PROXY=127.0.0.1,localhost ~/development/flutter/bin/flutter test`）。只在用户明确要安装包时才跑 `scripts/package_macos.sh`、`scripts/package_windows.sh` 或 `flutter build apk`。
-- Flutter SDK：macOS 在 `~/development/flutter`；Windows（当前机器）在 `D:\flutter`，不在 PATH 上，VS 2022 C++ 工具链已装。
-- 后端在隔壁 `~/Documents/code/music-free/backend`（Go/Gin，localhost:14533，admin/admin），服务端由用户自己启动，不要代启。
-- 验证视觉用临时 golden 渲染（Arial Unicode 字体 + RepaintBoundary.toImage），核对后删除测试文件；沙箱无 screencapture 权限。
-- **用户偏好：界面提示要少**。登录页一次只显示一条状态条（error 优先于 relogin notice），不要堆叠多个带框提示；所有长文本必须 `maxLines` + `overflow: TextOverflow.ellipsis`；说明文字用 `Mf.muted` 而不是几乎看不清的 `Mf.faint`。重登时第二步的「已连接」摘要要隐藏，只留「重新连接」。
-- **用户偏好：播放/暂停一律用 34dp 纯图标按钮，不要「图标+文字」的橙色胶囊**（2026-11-15 反馈投屏面板按钮太大）：统一控件 `MfPlayButton`（22dp glyph、hover 提亮、tooltip 保留文字但不常显）；桌面播放条与投屏遥控面板共用，遥控面板控制行抽成 `CastTransportControls`，与上一首/下一首的 `MfIconButton(34)` 严格同尺寸。
+- **不要每次改动后打包 DMG/APK**：用户在 VS Code 里 launch 调试（支持热重载）。验证 = `flutter analyze` + `flutter test`，必须绕代理：`env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY NO_PROXY=127.0.0.1,localhost ~/development/flutter/bin/flutter test`。只在用户明确要安装包时跑 `scripts/package_*.sh` / `flutter build apk`。
+- Flutter SDK：macOS `~/development/flutter`；Windows `D:\flutter`（不在 PATH），VS 2022 C++ 工具链已装。
+- 视觉验证用临时 golden 渲染（Arial Unicode + RepaintBoundary.toImage），核对后删测试文件；沙箱无 screencapture 权限。
+- **界面提示要少**：登录页一次只显示一条状态条（error 优先于 relogin notice）；长文本必须 `maxLines` + `ellipsis`；说明文字用 `Mf.muted` 不用 `Mf.faint`；重登第二步隐藏「已连接」摘要。
+- **播放/暂停一律 34dp 纯图标按钮**（`MfPlayButton`，22dp glyph），不要「图标+文字」胶囊；桌面播放条与投屏遥控面板共用，遥控控制行是 `CastTransportControls`。
+- 品牌色保留暖黑 + 朱红，不用技能推荐的深蓝/绿；触控区只放大移动端，桌面 34dp 不变。
 
 ## 关键技术事实
 
 - Subsonic 认证必须 token（md5(password+salt)），`p=` 会被后端拒（code 50）。
-- 流播放：只有 wma/ape 等系统解不了的格式才走 `format=mp3` 转码（chunked、无 Range、无时长），其余直传（206 + Content-Length）；直传才有进度条拖动与真实时长。**这仅适用于本机播放，DLNA 投屏另走一套规则**（见下）。
-- **DLNA 投屏（2026-11-15）**：`dart_cast` 的 `DlnaSoapBuilder` 把 DIDL 硬编码成 `object.item.videoItem`，电视会把音乐交给视频管线报「播放器异常」→ `AudioDlnaSession` 自建音频 DIDL（`musicTrack` + albumArtURI + 双重 XML 转义）。投屏 URL 由 `MusicFreeClient.castStreamUrl` 生成，host 必须从 `allAddresses` 挑纯 LAN 裸 IP（排除 `/app/` 网关、relay 域名、loopback，否则电视缺 fnOS token/relay Cookie 而 401）；非 MP3 一律走后端 DLNA 转码直链 `format=mp3&estimateContentLength=true&dlna=true`（后端 `serveTranscodedDLNA` 落临时文件 + `http.ServeContent`，Vewd 栈才有 Content-Length/Range/时长），protocolInfo 与后端 `didl.go` 一致用 `OP=00;CI=1`；MP3 才直传（`OP=01;CI=0`）。本地播放的 `needsTranscode` 不要拿来判定投屏。
-- **DLNA 元数据/歌词（2026-11-15 第二轮）**：自建 DIDL 必须同时给 `dc:creator` + `upnp:artist role="Performer"` + `upnp:album`（缺了电视就显示未知歌手/未知专辑），封面给两条 `albumArtURI`（含 `dlna:profileID="JPEG_TN"`）。UPnP AV **没有标准歌词属性**，只能把纯文本歌词放 `dc:description`、LRC 原文放 `dc:longDescription`，电视是否显示取决于接收端。`_castToSession` 必须在推 SetAVTransportURI **之前**取歌词（一次 DIDL 不能后补），用 `structuredLyrics(retryable: false)` + 1s 超时，避免可选元数据拖起播或触发全局重登。App 端歌词/进度条/唱片/列表高亮统一读 `AppModel.playback`（本地镜像 `player.state`，投屏时由 cast session 的 position/state 流驱动），不要再直接绑 `player.state`；该 notifier 必须在整个 local↔cast 切换过程中保持同一个实例。
-- **热重载陷阱（2026-11-15）**：`State` 里不要用 `late final` 缓存 `AppModel` 的 notifier 并在 `initState` 赋值——Hot Reload 保留 State 却不重跑 initState，读新字段必抛 `LateInitializationError: Field '_playback@...'`。`player_bar.dart` / `now_playing.dart` 已改为可空 `_playback?` + `_bindPlayback()`，在 `didChangeDependencies` 与 `reassemble` 两处重绑（identical 去重），dispose/监听回调一律空安全。新增 State 字段照此办理。
-- **测试约定**：`cast_test.dart` 这类含真实异步与 AppModel 探测 timer 的文件只放 `test()`；混入 `testWidgets` 会因 FakeAsync 时钟不推进而永久挂起（`tester.runAsync` 也救不回）。需要测 UI 时把控件抽成纯参数 widget（如 `CastTransportControls`），在独立文件里 `testWidgets`。
-- `just_audio` 的 `durationStream` 可能发 0，`player.dart` 已加 guard 忽略 ≤0，防止覆盖元数据时长。
-- `cached_network_image` 不走自定义 http client → 已用全局 `HttpOverrides`（私有地址 DIRECT）解决。
-- 沙箱内 `flutter test` 会因 HTTP_PROXY 报 "Invalid WebSocket upgrade request"，必须绕代理跑。
-- Windows 构建依赖 windows/CMakeLists.txt 里的全局 `/utf-8` 和 `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`（修 just_audio_windows：中文代码页 C4819→error、MSVC 14.51 的 experimental/coroutine STL1011），删了必挂。
-- Android 构建：device_info_plus 9.1.2 的 compileSdk 写死 33，靠 android/build.gradle.kts 里 subprojects + afterEvaluate 反射抬到 36 才能过 AGP 9 的检查；该块必须排在 `evaluationDependsOn(":app")` 之前。`kotlin.incremental=false` 是为了绕开 Windows 上 Kotlin 增量缓存关不掉的报错。
-- 锁屏/后台播放（三端机制不同，不要混）：
-  - Android/iOS：`audio_service` + AndroidManifest 的 `com.ryanheise.audioservice.AudioService`（foregroundServiceType=mediaPlayback）+ `MediaButtonReceiver` + `FOREGROUND_SERVICE`/`FOREGROUND_SERVICE_MEDIA_PLAYBACK`/`WAKE_LOCK` 权限，缺任一项锁屏就停。代码在 `lib/audio/media_session.dart`，main() 里 `MfMediaSession.start()` 先于 runApp。
-  - `audio_service` 与本项目都有 `PlaybackState` → media_session.dart 里 `import 'player.dart' as mf;` 隔开，别改回去。
-  - 鸿蒙：module.json5 必须同时有 ability 的 `backgroundModes: ["audioPlayback"]` 和 `ohos.permission.KEEP_BACKGROUND_RUNNING`，再由 EntryAbility 通过 channel `com.seasonyuu.musicfly/background_audio` 起 `backgroundTaskManager` 长时任务（Dart 侧 `lib/audio/background_task.dart`，只在真的 playing 后申请，系统会校验 AVSession 状态）。孤立的 backgroundModes 或孤立的 startBackgroundRunning 都无效。
-  - 鸿蒙媒体面板/AVSession 由 just_audio 的 ohos 分支在 ArkTS 侧创建，audio_service 在鸿蒙上没有实现，不要试图在那儿调。
-  - 鸿蒙锁屏封面链路：`lib/audio/system_artwork.dart` 带 `fnRelayHeadersFor` 下载字节 → `player.dart` 的 `setMetadata` 通道 `artwork` 字段 → vendor `MediaAvPlayer.ets` 解码 PixelMap → `AVMetadata.mediaImage`。直接把 getCoverArt URL 交给系统 AVSessionService 会因缺网关 `Authorization: trim`/relay `Cookie` 而 401，锁屏无封面；`mediaImage` 传 undefined 会让整次 setAVMetadata 报 401，空串才是合法兜底。
-  - Android 13+ 必须请求 `POST_NOTIFICATIONS`（manifest 声明 + 首次播放时经 channel `musicfly/notification` 请求，见 MainActivity.kt）：前台服务通知本身豁免，但暂停后服务退出前台、通知降级为普通通知，没权限就消失 —— 表现为「暂停后锁屏控制器没了，点不回去」。
-  - 通知小图标必须是单色 vector（`res/drawable/ic_stat_music.xml`）并显式配 `androidNotificationIcon`，否则默认的彩色启动图标会被渲染成白方块。
-  - iOS 后台播放除了 `UIBackgroundModes: audio`，还必须在启动时把 AVAudioSession 配成 playback（`lib/audio/system_audio.dart` 用 audio_session 的 `AudioSessionConfiguration.music()`），否则切后台即静音、锁屏不出 Now Playing。
-  - 鸿蒙构建会把 `audio_session` override 到 pub.dev 0.2.4（无 ohos 实现），所以 `configureSystemAudio()` 必须 try/catch，鸿蒙上必然抛 MissingPluginException。
-
-- FNID 登录的 LAN/WAN 故障切换：session.addresses 必须保存飞牛返回的**全部**候选链路（含当前网络下不可达的外网/网关/中继），不能只存当次 `reachable`；网关/中继地址需要 fnOS token，登录页「外网自动切换（可选）」可预热；已加载的播放流不会随地址切换重连。
-- 连接恢复状态机（2026-11-12 重构，`lib/state/app_model.dart` + `lib/data/musicfree_client.dart`）：2 分钟常规探测 + 全离线时 3/5/10/20/30s 退避循环探测；连续 3 轮全不可达 → `reloginRequired` 把用户带到登录页（后台仍探测，网络恢复自动清除并回到首页）。`onTransportFailure` / `onAuthFailure` 是 `Future<bool> Function()` **可等待**回调，client 在探测/静默重登成功后**重放一次请求**（`_get` 的 URI 必须在闭包内构造，否则重放仍打到旧地址）。`ServerInfo.authRequired` 区分「链路通但凭据失效」与「链路不通」——一天后 JWT 过期被 ping 误判成全地址不可达、而 `_recoverFnConnect` 只刷 fnOS token 不换 Music Free token，是老版本一直连不上、只能手动重登的根因。`_reloginSilently()` 只对 `/app/` 网关链路用 `gatewayLogin(anonymous: true)` 免密换新 token；普通登录没存 app 密码，只能回登录页。`_post` 一律 `retryable: false`，登录失败不触发故障切换。
-- **用户约定：FNID 地址池是内部实现，绝不暴露给用户**。`MusicFreeSession.fnConnect` 标记区分两种登录；FNID 在设置页只显示一条只读「当前连接」，不显示备用地址、不能增删改（`AppModel.addressesManaged` 拦截），只有普通登录才允许手动备用地址。旧会话靠 `looksLikeFnAddressPool()` 推断（`/app/` 网关链路 + 裸 IP 直连混合）。探测/切换仍走完整 `allAddresses`。
-- **用户约定：FNID 登录没有端口表单项，后端端口定死 14533**（2026-11-12）。`kDefaultBackendPort`（`lib/data/fn_connect.dart`）是唯一来源，`prepareFnConnect()` 不再接受 `backendPort` 参数；`loadLastFnPort`/`saveLastFnPort` 与 `musicfly.fn.port` 持久化已删除。`buildFnCandidates` 保留 `backendPort` 位置参数（纯函数/测试用），但登录流程只传常量；网关/中继仍用 broker 返回的 fnOS 端口。普通登录的 URL 输入框仍可带任意端口。
-- **用户约定：FNID 完成 NAS 连接后必须输入 Music Free 账号密码才能登录**（2026-11-15，防止网关免密直接登录已绑定的默认账号、导致用户无法更改登录账号）。`prepareFnConnect()` 不再调用 `_tryAutoGatewayLogin()`（方法已删除），`loginFnPrepared()` 一律要求非空凭据并走 `MusicFreeClient.loginFnAddress()`：网关 `/app/` 链路用 `gateway-bind`（每次重绑 NAS→账号，签发用户所选账号并同步默认账号；绑定端点任何失败都 fallback 同地址普通 `login`，别按异常类型区分——「网关登录未启用」的 404 JSON 也是 `AuthException`），直连/中继用普通 `login`。`gatewayLogin()` 现在只剩 `_reloginSilently()` 用于 JWT 过期续期（恢复的是最后一次交互登录绑定的账号），不要在登录流程里恢复免密跳过。`AppModel.preferFnConnectTab` 让退出登录/重登回到 FNID 页签以便换账号。测试：`test/fn_login_credentials_test.dart`（纯 test + `setFnProbeForTest` 注入点）、`test/fn_login_page_test.dart`（testWidgets 独立文件，避免 FakeAsync 挂起）。
-- 播放队列/「播放列表」面板（2026-11-13 仿网易云新增）：`lib/ui/queue_sheet.dart` 是当前播放队列底部弹窗（当前播放 N / 历史播放 双 tab、来源行、每行删除+拖拽、当前项高亮、底部播放模式与「回到当前」两个 pill）；三处入口 = 迷你条、桌面条、全屏播放器主控制行。`AppModel` 用 `PlayMode {sequential, loopAll, loopOne, shuffle}` + `queueSource` + `history` 驱动，新增 `playQueueAt`/`removeFromQueue`/`reorderQueue`/`clearQueue`/`clearHistory`/`cyclePlayMode`。`next()` 拆成 `_advance(auto:)`，只有自动续播才认单曲循环；**默认仍 `sequential`（播完最后一首停止），是既有设计约定，未确认别改成列表循环**；`systemSkip` 与失败跳过逻辑未动。
-- **PC 播放队列是右侧停靠面板，不是模态弹窗**（2026-11-13 用户确认）：统一入口 `showQueue(context, {fromFullPlayer})` 按 `kDockedQueueBreakpoint = 900` 分流——宽屏用 `QueueSheet(docked: true)` + `AppModel.queuePanelVisible`，窄屏仍 `showQueueSheet` 底部弹窗；从全屏播放页点队列先 `closeNowPlaying()` 再 `openQueuePanel()`。面板必须挂在 HomeShell **内容区 Row 的右侧、止于播放条上方**，若放到整行末尾会把桌面播放条压到 ~390px 触发横向溢出。桌面播放条 `<760` 宽时把固定 302px 的镜像 `rightSpan` 降为 0。
-- **用户偏好：队列底部两个按钮保持紧凑 chip**（2026-11-13 反馈「侧边栏和移动视图按钮较大」）：`_Pill` 视觉高 30px、按内容宽度居中（不 `Expanded` 平分面板）、外层 38px 点击区；footer padding `14/8/14/8`、列表底部 padding 62。docked 面板与手机弹窗共用同一套，别改回 46px 大 pill。
-- `reorderQueue` 按 ReorderableListView 旧 `onReorder` 的**插入索引**语义（newIndex > oldIndex 时 -1）；不要换成新版 `onReorderItem`（它会预先调整 newIndex，会整体错位，且 macOS 上 Flutter SDK 可能较旧）。代码里带 `// ignore: deprecated_member_use`。
-- 移动端竖屏（宽 < 560）全屏播放器底部按钮分主/次两行：主行 5 个（播放模式/上一首/播放/下一首/队列），次级行 4 个（收藏/歌曲信息/音量/投屏）；桌面仍单行 + 音量 slider。迷你播放条是悬浮圆角卡片，只留「播放 + 播放列表」两个按钮，上一首/收藏/投屏已迁到全屏播放器。
-- **竖屏唱片尺寸不能按 `maxHeight` 的固定比例硬算**（2026-11-13 修溢出）：`now_playing.dart` 窄屏分支必须是 `Expanded(LayoutBuilder(唱片)) + 固定高度 _credits(...)`，唱片 = `min(宽度×0.78, 剩余高度-4, 300)`；比例硬算（旧 0.72）会让歌名/歌手/专辑三行把 Column 撑出 `BOTTOM OVERFLOWED BY ... PIXELS`。封面:歌词 flex 为 6:4，歌词区可用高度 < 140 时隐藏歌词面板（空状态有最小高度）。`test/now_playing_test.dart` 有多尺寸 `takeException() == null` 回归。
-- **设计 token 体系（2026-11-15 UI UX Pro Max 技能）**：所有颜色必须走 `lib/ui/theme.dart` 的 `Mf.*`；文字只用 `Mf.text` / `textSoft` / `muted`（均 ≥4.5:1），`Mf.faint` 只作装饰、`Mf.disabled` 只作禁用态，绝不用它们写文字；字号走 `MfType`、圆角走 `MfRadius`、间距走 `MfSpace`、动效走 `MfMotion`（`MfMotion.of(context, d)` 自带 reduced-motion 归零）；移动端点击区用 `expandHitTarget: isMobilePlatform`（默认 false，桌面 34dp 视觉尺寸不变）。主题已补全 M3 ColorScheme 角色与 textTheme 层级，`error` 与 `accent` 分离。`test/ui_theme_test.dart` 有对比度与 token 纪律回归，别绕开。技能已装在 `~/.workbuddy/skills/ui-ux-pro-max/`。
-- **用户偏好（2026-11-15 确认）**：样式优化保留暖黑 + 朱红品牌色，不采用技能推荐的深蓝/绿色方案；触控区只放大移动端，桌面 34dp 纯图标按钮不变。
-- **首页「查看全部」必须右对齐**（2026-11-15 用户反馈跑到页面中央）：`home_view.dart` `_SectionCard` header 用「左侧 `Expanded` 独占剩余宽度 + 行尾固定按钮」，不要用 `Spacer()` 与多个 flex 混排（会均分空间仍居中）；`test/home_header_align_test.dart` 锁定。
+- 流播放：只有 wma/ape 等系统解不了的格式走 `format=mp3` 转码（chunked、无 Range、无时长），其余直传（206 + Content-Length，才有进度条拖动与真实时长）。**此规则只管本机播放，投屏另有一套**。`needsTranscode` 不要拿来判投屏。
+- **DLNA 投屏**：`dart_cast` 的 DIDL 硬编码成 `videoItem`，电视会报「播放器异常」→ `AudioDlnaSession` 自建 `musicTrack` DIDL（`dc:creator` + `upnp:artist role=Performer` + `upnp:album` + 两条 albumArtURI，XML 双重转义）。URL 由 `castStreamUrl` 生成，host 必须从 `allAddresses` 挑纯 LAN 裸 IP（排除 `/app/` 网关、relay、loopback，否则 401）；非 MP3 走后端 `format=mp3&estimateContentLength=true&dlna=true`（`serveTranscodedDLNA` 落临时文件 + ServeContent），MP3 才直传；protocolInfo 与后端 `didl.go` 都是 `OP=00;CI=1`。UPnP AV 无标准歌词字段，纯文本进 `dc:description`、LRC 进 `dc:longDescription`。歌词必须在推 SetAVTransportURI **之前**取（`retryable: false` + 1s 超时）。
+- App 端歌词/进度/唱片/列表高亮统一读 `AppModel.playback`（本地镜像 + 投屏时由 cast session 驱动），不要直接绑 `player.state`；该 notifier 实例在 local↔cast 切换中必须保持同一个。
+- **热重载陷阱**：`State` 里别用 `late final` 缓存 notifier 再在 `initState` 赋值（Hot Reload 不重跑 initState → `LateInitializationError`）。用可空 `_playback?` + `_bindPlayback()`，在 `didChangeDependencies` 与 `reassemble` 重绑（identical 去重），回调用空安全。
+- **测试约定**：含真实异步 + AppModel 探测 timer 的文件（如 `cast_test.dart`）只放 `test()`；混入 `testWidgets` 会因 FakeAsync 不推进而永久挂起。要测 UI 就把控件抽成纯参数 widget 再单文件 `testWidgets`。
+- `just_audio` 的 `durationStream` 可能发 0 → `player.dart` 已 guard 忽略 ≤0。
+- `cached_network_image` 不走自定义 http client → 全局 `HttpOverrides`（私有地址 DIRECT）解决。
+- 沙箱内 `flutter test` 会因 HTTP_PROXY 报 "Invalid WebSocket upgrade request"，必须绕代理（见上）。
+- Windows 构建依赖 `windows/CMakeLists.txt` 的全局 `/utf-8` 与 `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`（中文代码页 C4819、MSVC 14.51 STL1011），删了必挂。
+- Android 构建：device_info_plus 9.1.2 写死 compileSdk 33，靠 `android/build.gradle.kts` 的 subprojects + afterEvaluate 反射抬到 36，且该块要在 `evaluationDependsOn(":app")` 之前；`kotlin.incremental=false` 为绕 Windows 缓存报错。
+- 锁屏/后台播放（三端机制不同）：
+  - Android/iOS：`audio_service`（`lib/audio/media_session.dart`，main() 里先 start 再 runApp）+ manifest 的 AudioService/MediaButtonReceiver/FOREGROUND_SERVICE(mediaPlayback)/WAKE_LOCK。`import 'player.dart' as mf;` 隔开两套 PlaybackState，别改回去。
+  - Android 13+ 要 `POST_NOTIFICATIONS`（首次播放时经 channel `musicfly/notification` 请求），否则「暂停后锁屏控制器消失」；通知小图标必须单色 vector `ic_stat_music.xml` 并配 `androidNotificationIcon`。
+  - iOS 还要启动时把 AVAudioSession 配成 playback（`system_audio.dart` 用 `AudioSessionConfiguration.music()`）。
+  - 鸿蒙：module.json5 的 `backgroundModes: ["audioPlayback"]` **和** `KEEP_BACKGROUND_RUNNING` 都要，再由 EntryAbility 经 channel `com.seasonyuu.musicfly/background_audio` 起长时任务（`lib/audio/background_task.dart`，真的 playing 后才申请）。孤立的任一半都无效。AVSession/媒体面板由 just_audio ohos 分支在 ArkTS 侧创建，鸿蒙上没有 audio_service。`configureSystemAudio()` 必须 try/catch（鸿蒙 override 到 audio_session 0.2.4，必抛 MissingPluginException）。
+- **鸿蒙锁屏元数据**：`system_artwork.dart` 带 `fnRelayHeadersFor` 下载字节 → `player.dart` setMetadata 的 `artwork` 字段 → vendor `MediaAvPlayer.ets` 解码 PixelMap → `AVMetadata.mediaImage`。系统自己取 URL 会 401；`mediaImage` 传 undefined 会让整次 setAVMetadata 401，空串才是合法兜底。需要鉴权的封面 URL（`fnRelayHeadersFor(url) != null`）一律不下发给系统，先推空串、再由字节补 PixelMap——锁屏卡片取不到新图会把上一首的封面留在原位。快照（AppStorage）是进程级唯一，assetId = trackId，同曲多次推送不变、换曲才变。**封面异步解码必须带 artworkAssetId 归属 + 每次 await 后重验 token/active 实例**，否则旧图落进新歌快照，锁屏出现「封面是上一首、歌名是这一首」（2026-11-16 修）。Dart 侧确认补推要等「已出声 + 封面定局」（`_playbackStarted`/`_coverResolved`），别在播放刚开始就推半成品。
+- FNID/LAN 切换：`session.addresses` 存飞牛返回的全部候选链路（含当次不可达的）；网关/中继需 fnOS token。
+- 连接恢复状态机（`app_model.dart` + `musicfree_client.dart`）：2 分钟常规探测 + 全离线 3/5/10/20/30s 退避；连续 3 轮全不可达 → `reloginRequired`。`onTransportFailure`/`onAuthFailure` 是 `Future<bool> Function()` 可等待回调，client 成功后会重放一次请求（`_get` 的 URI 必须在闭包内构造）。`ServerInfo.authRequired` 区分「链路通但凭据失效」。「链路通但凭据失效」这类误判是全地址不可达假象的根因。`_reloginSilently()` 只对 `/app/` 网关链路免密续期；`_post` 一律 `retryable: false`。
+- **FNID 地址池是内部实现，绝不暴露**：设置页只显示一条只读「当前连接」，不能增删改（`addressesManaged` 拦截）。
+- **FNID 登录无端口项，后端端口定死 14533**（`kDefaultBackendPort` 唯一来源）；普通登录仍可带任意端口。
+- **FNID 连上 NAS 后必须输入账号密码**（防网关免密登进默认账号）：`loginFnPrepared()` 要求非空凭据，网关链路走 `gateway-bind`（任何失败都 fallback 同地址 `login`，别按异常类型区分），直连/中继走普通 `login`。`gatewayLogin()` 只留给 `_reloginSilently()`。退出登录回 FNID 页签（`preferFnConnectTab`）。
+- 队列面板：`queue_sheet.dart`（当前/历史双 tab、删除+拖拽、当前项高亮、底部播放模式与「回到当前」）；入口 = 迷你条 / 桌面条 / 全屏播放器。`PlayMode {sequential, loopAll, loopOne, shuffle}` + `queueSource` + `history`。**默认仍 `sequential`**（播完停止），未确认别改列表循环；`_advance(auto:)` 只有自动续播才认单曲循环。
+- **PC 队列是右侧停靠面板**：`showQueue(context, {fromFullPlayer})` 按 `kDockedQueueBreakpoint = 900` 分流；面板挂在 HomeShell 内容区 Row 右侧、止于播放条上方（放整行末尾会压窄播放条导致溢出）；播放条 <760 宽时镜像 `rightSpan` 归 0。
+- 队列底部按钮保持紧凑 chip（`_Pill` 视觉 30px、内容宽度、外层 38px 点击区；footer padding 14/8）。
+- `reorderQueue` 用旧 `onReorder` 插入索引语义（newIndex > oldIndex 时 -1），别换 `onReorderItem`。
+- 移动端竖屏（宽 < 560）全屏播放器按钮两行：主行（模式/上一首/播放/下一首/队列）+ 次级行（收藏/歌曲信息/音量/投屏）；桌面单行 + 音量 slider。迷你条只留播放 + 播放列表。
+- **竖屏唱片不能按 maxHeight 比例硬算**：`Expanded(LayoutBuilder)` + 固定高度 `_credits`，唱片 = `min(宽×0.78, 剩余高-4, 300)`；封面:歌词 6:4，歌词区 < 140 隐藏面板。`test/now_playing_test.dart` 有多尺寸回归。
+- **设计 token**：颜色只用 `Mf.*`；文字只用 `Mf.text`/`textSoft`/`muted`（≥4.5:1），`faint`/`disabled` 不写字；字号 `MfType`、圆角 `MfRadius`、间距 `MfSpace`、动效 `MfMotion`。`test/ui_theme_test.dart` 有对比度与 token 纪律回归。
+- 首页「查看全部」右对齐：`Expanded` 占满 + 行尾固定按钮，别用 `Spacer()` 混排（`test/home_header_align_test.dart` 锁定）。
 
 ## 遗留事项
 
-- 鸿蒙图标已换成 Music Free SVG 版（`ohos/*/media/{app_icon,icon}.png`，源 SVG 在 `~/Documents/code/music-free/frontend/public/logo.svg`）；iOS/Android/macOS 平台图标仍是默认图。
+- 图标：鸿蒙已换 Music Free SVG 版（`ohos/*/media/{app_icon,icon}.png`，源 `music-free/frontend/public/logo.svg`）；iOS/Android/macOS 仍是默认图。
 - 仓库目录名仍是 `FnMusic`（用户未要求改）。
-- 本地库有 4 首残缺片段 + 3 个孤儿文件未清理（用户未确认）；8 组重复记录待去重。
-- 「漠河舞厅 (摇滚版)」文件实际是 m4a 但扩展名 .mp3，直传后会播不出，需重命名 + rescan。
+- 本地库有 4 首残缺片段 + 3 个孤儿文件待清理（用户未确认）；8 组重复记录待去重。
+- 「漠河舞厅 (摇滚版)」实际是 m4a 但扩展名 .mp3，直传播不出，需重命名 + rescan。
