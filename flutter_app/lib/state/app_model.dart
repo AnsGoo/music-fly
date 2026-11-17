@@ -148,6 +148,18 @@ class AppModel extends ChangeNotifier {
       this.player,
       onNext: next,
       onPrevious: previous,
+      // Android 13+ 锁屏媒体面板的两个自定义按钮，与鸿蒙锁屏共用同一套
+      // 队列方法；图标状态由下面的 extrasProvider 提供，切模式/收藏/换歌
+      // 时经 _syncSystemExtras 一并重推。
+      onFavorite: systemToggleFavorite,
+      onCycleMode: systemCyclePlayMode,
+      extrasProvider: () => (
+        favorite: currentTrack?.isFavorite ?? false,
+        playModeIndex: ohosPlayModeIndex(_playMode),
+      ),
+      // 锁屏封面下载由 audio_service 自己发起，飞牛网关 / relay 链路的鉴权
+      // header 必须在这里交给它，否则锁屏媒体卡片永远没有封面。
+      artHeadersProvider: this.client.artHeadersFor,
     );
     // 鸿蒙没有 audio_service：AVSession 的切歌命令由 vendored just_audio 的
     // ohos 分支转发回播放器，再落到同一个队列方法，只有一份真理来源。
@@ -1968,6 +1980,9 @@ class AppModel extends ChangeNotifier {
       playModeIndex: ohosPlayModeIndex(_playMode),
       favorite: (track ?? currentTrack)?.isFavorite ?? false,
     ));
+    // Android 13+ 锁屏的收藏/循环按钮图标走 audio_service 的 custom action，
+    // 状态不在播放器里，位置不动时不会自动重推，这里显式刷一次。
+    MfMediaSession.instance?.refreshExtras();
   }
 
   /// 锁屏「循环模式」按钮：切到下一个模式，与 App 内按钮共用同一套顺序，

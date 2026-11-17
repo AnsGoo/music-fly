@@ -4,11 +4,17 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
-import io.flutter.embedding.android.FlutterActivity
+import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-class MainActivity : FlutterActivity() {
+// 必须继承 AudioServiceActivity 而不是 FlutterActivity：audio_service 0.18
+// 在 onAttachedToActivity 里比对 plugin 的 messenger 与 Activity 提供的引擎，
+// 普通 FlutterActivity 不会把引擎注册进 FlutterEngineCache，检测到不一致就抛
+// "The Activity class ... has not provided the correct FlutterEngine"，导致
+// AudioService.init() 失败、锁屏/通知栏媒体控制完全不可用。AudioServiceActivity
+// 只多 override 了 provideFlutterEngine 返回共享引擎，下面的 MethodChannel 照常注册。
+class MainActivity : AudioServiceActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         // FnConnect stable device ID: ANDROID_ID is scoped to the device +

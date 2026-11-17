@@ -1,0 +1,13 @@
+<!-- 锁屏「播放顺序」按钮：单曲循环（循环箭头中间一个 1）。纯白单色。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7,7h10v3l4,-4 -4,-4v3H5v6h2V7zM17,17H7v-3l-4,4 4,4v-3h12v-6h-2v4z"/>
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M11.5,10h1v5h-1v-5zM11,9.2h2c0,0 0.5,0 0.5,0.5v0.3h-3v-0.3c0,-0.5 0.5,-0.5 0.5,-0.5z"/>
+</vector>

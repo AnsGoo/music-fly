@@ -616,6 +616,15 @@ class MusicFreeClient {
     }
   }
 
+  /// Headers a system component (lock-screen media session, cache manager)
+  /// must send when fetching [url] itself. Only飞牛网关 / relay links need
+  /// them; plain LAN/WAN servers authenticate via the query params in the
+  /// URL, so this returns null and no extra headers are required.
+  Map<String, String>? artHeadersFor(String url) {
+    final token = _session?.token;
+    return fnRelayHeadersFor(url, bearerToken: token);
+  }
+
   /// Album art for the renderer's Now Playing screen, on the same LAN host as
   /// [castStreamUrl] so the TV does not hit a gateway that would answer 401.
   String? castCoverUrl(String? coverId, {int size = 320}) {

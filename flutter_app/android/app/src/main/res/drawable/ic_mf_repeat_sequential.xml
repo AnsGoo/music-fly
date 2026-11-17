@@ -1,0 +1,10 @@
+<!-- 锁屏「播放顺序」按钮：顺序播放（箭头直行，不循环）。纯白单色。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,6h12v2H4V6zM4,11h12v2H4v-2zM4,16h8v2H4v-2zM17,10l5,3 -5,3v-6z"/>
+</vector>

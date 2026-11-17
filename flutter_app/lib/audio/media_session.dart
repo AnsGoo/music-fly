@@ -94,10 +94,19 @@ class MfMediaSession {
 
   /// 把 [player] 的状态同步到系统媒体中心，并把媒体中心下发的命令交回队列。
   /// 队列的上一首 / 下一首在 [onNext] / [onPrevious] 里由 `AppModel` 提供。
+  ///
+  /// [onFavorite] / [onCycleMode] 是 Android 13+ 锁屏媒体面板的两个自定义
+  /// 按钮（收藏、播放顺序）。它们不是标准 transport action，只能走 custom
+  /// action；此二者与其状态来源 [extrasProvider] 都是可选的——鸿蒙/桌面没有
+  /// 这套面板，测试里的纯 MfPlayer 也不提供，缺任一就不显示这两个按钮。
   void bind(
     mf.MfPlayer player, {
     required Future<void> Function() onNext,
     required Future<void> Function() onPrevious,
+    Future<void> Function()? onFavorite,
+    Future<void> Function()? onCycleMode,
+    ({bool favorite, int playModeIndex}) Function()? extrasProvider,
+    Map<String, String>? Function(String url)? artHeadersProvider,
   }) {
     _handler
       ..onPlay = player.resume
@@ -105,13 +114,25 @@ class MfMediaSession {
       ..onSeek = player.seek
       ..onStop = player.stop
       ..onNext = onNext
-      ..onPrevious = onPrevious;
+      ..onPrevious = onPrevious
+      ..onFavorite = onFavorite
+      ..onCycleMode = onCycleMode
+      ..extrasProvider = extrasProvider
+      ..artHeadersProvider = artHeadersProvider;
     unbind();
     _player = player;
     // `state` 是 ValueNotifier，没有 stream；位置每 200ms 变一次，监听器里由
     // handler 自己节流，只推秒级增量。
     player.state.addListener(_push);
     _push();
+  }
+
+  /// 收藏状态 / 播放模式变化后主动重推一次媒体面板图标。这两个状态不在
+  /// 播放器 [mf.PlaybackState] 里，播放器位置不动时 [_push] 不会被触发，
+  /// 必须由 AppModel 在切模式 / 收藏 / 换歌后调用这里刷新。
+  void refreshExtras() {
+    final player = _player;
+    if (player != null) _handler.publish(player.state.value, force: true);
   }
 
   void _push() {
@@ -136,7 +157,34 @@ class _MfAudioHandler extends BaseAudioHandler {
   Future<void> Function()? onStop;
   Future<void> Function()? onNext;
   Future<void> Function()? onPrevious;
+  Future<void> Function()? onFavorite;
+  Future<void> Function()? onCycleMode;
   Future<void> Function(Duration position)? onSeek;
+
+  /// Android 锁屏自定义按钮的当前状态来源：收藏态 + 播放模式索引（0-3）。
+  /// 由 AppModel 注入，只有它同时知道队列当前曲目和播放模式。
+  ({bool favorite, int playModeIndex}) Function()? extrasProvider;
+
+  /// 封面 URL 的鉴权 header 来源（飞牛网关 / relay 链路需要）。audio_service
+  /// 自己下载锁屏封面，不带这些 header 就会拿到 401 → 通知 largeIcon=null，
+  /// 表现为锁屏媒体卡片永远没有专辑封面。
+  Map<String, String>? Function(String url)? artHeadersProvider;
+
+  // custom action 的 name，与 mfMediaControls() 里的 name 对应。
+  static const favoriteAction = 'musicfly_favorite';
+  static const cycleModeAction = 'musicfly_cycle_mode';
+
+  @override
+  Future<dynamic> customAction(String name, [Map<String, dynamic>? extras]) {
+    switch (name) {
+      case favoriteAction:
+        return onFavorite?.call() ?? Future.value();
+      case cycleModeAction:
+        return onCycleMode?.call() ?? Future.value();
+      default:
+        return super.customAction(name, extras);
+    }
+  }
 
   // 媒体中心只需要秒级粒度：播放位置每秒推一次就够，`PlaybackState.speed`
   // 会让系统自己在两次推送之间插值。全量推送会把平台通道刷爆。
@@ -145,6 +193,8 @@ class _MfAudioHandler extends BaseAudioHandler {
   String? _lastTrackId;
   bool? _lastPlaying;
   Duration _lastPosition = Duration.zero;
+  bool? _lastFavorite;
+  int? _lastPlayModeIndex;
 
   @override
   Future<void> play() async => onPlay?.call();
@@ -169,12 +219,14 @@ class _MfAudioHandler extends BaseAudioHandler {
 
   /// 把播放器状态翻译成媒体中心要的两样东西：当前曲目（[mediaItem]）和
   /// 可播状态（[playbackState]，决定通知栏按钮长什么样）。
-  void publish(mf.PlaybackState state) {
+  void publish(mf.PlaybackState state, {bool force = false}) {
     final trackId = state.trackId;
     if (trackId == null) {
       if (mediaItem.value != null) mediaItem.add(null);
       _lastTrackId = null;
       _lastPlaying = null;
+      _lastFavorite = null;
+      _lastPlayModeIndex = null;
       playbackState.add(
         PlaybackState(processingState: AudioProcessingState.idle),
       );
@@ -188,6 +240,10 @@ class _MfAudioHandler extends BaseAudioHandler {
       artist: state.subtitle.isEmpty ? null : state.subtitle,
       duration: state.duration > Duration.zero ? state.duration : null,
       artUri: artUri,
+      // 飞牛网关 / relay 封面必须带鉴权 header，否则 audio_service 的缓存
+      // 管理器下载 401，锁屏媒体卡片拿不到 largeIcon。普通链路返回 null。
+      artHeaders:
+          artUri != null ? artHeadersProvider?.call(artUri.toString()) : null,
     );
     // 换歌才重建 MediaItem：位置跳动不该让通知栏重新加载封面。
     final previous = mediaItem.value;
@@ -200,25 +256,40 @@ class _MfAudioHandler extends BaseAudioHandler {
       mediaItem.add(item);
     }
 
+    // 收藏 / 循环模式不在播放器状态里，单独从 AppModel 注入的提供者读。
+    final extras = extrasProvider?.call();
+    final favorite = extras?.favorite ?? false;
+    final modeIndex = extras?.playModeIndex ?? 0;
+
     final positionJumped =
         (state.position - _lastPosition).abs() >= _positionEpsilon;
-    if (_lastTrackId == trackId &&
+    final extrasChanged = favorite != _lastFavorite ||
+        modeIndex != _lastPlayModeIndex;
+    if (!force &&
+        _lastTrackId == trackId &&
         _lastPlaying == state.playing &&
-        !positionJumped) {
+        !positionJumped &&
+        !extrasChanged) {
       return;
     }
     _lastTrackId = trackId;
     _lastPlaying = state.playing;
     _lastPosition = state.position;
+    _lastFavorite = favorite;
+    _lastPlayModeIndex = modeIndex;
 
     playbackState.add(
       PlaybackState(
-        controls: [
-          MediaControl.skipToPrevious,
-          if (state.playing) MediaControl.pause else MediaControl.play,
-          MediaControl.skipToNext,
-        ],
+        controls: mfMediaControls(
+          playing: state.playing,
+          favorite: favorite,
+          playModeIndex: modeIndex,
+          includeFavorites: onFavorite != null,
+          includeCycleMode: onCycleMode != null,
+        ),
         systemActions: const {MediaAction.seek},
+        // 紧凑视图始终只放三个标准按钮；两个自定义按钮只在展开的媒体面板 /
+        // Android 13+ 锁屏控件里出现，避免挤掉播放/切歌。
         androidCompactActionIndices: const [0, 1, 2],
         processingState: AudioProcessingState.ready,
         playing: state.playing,
@@ -233,4 +304,56 @@ class _MfAudioHandler extends BaseAudioHandler {
     if (value == null || value.isEmpty) return null;
     return Uri.tryParse(value);
   }
+}
+
+/// 播放模式索引 → 图标资源。顺序与 `PlayMode` 一致：
+/// 0 顺序 / 1 列表循环 / 2 单曲循环 / 3 随机。
+String mfPlayModeIcon(int index) => switch (index) {
+      1 => 'drawable/ic_mf_repeat_all',
+      2 => 'drawable/ic_mf_repeat_one',
+      3 => 'drawable/ic_mf_shuffle',
+      _ => 'drawable/ic_mf_repeat_sequential',
+    };
+
+String mfPlayModeLabel(int index) => switch (index) {
+      1 => '列表循环',
+      2 => '单曲循环',
+      3 => '随机播放',
+      _ => '顺序播放',
+    };
+
+/// 构造锁屏/通知栏媒体面板的按钮列表。三个标准 transport 按钮恒在；两个
+/// 自定义按钮（收藏、播放顺序）只有 AppModel 注入了对应回调才加入——Android
+/// 13+ 会把 custom action 放进面板槽位 4/5，Android 12- 最多显示前三个。
+///
+/// 抽成顶层纯函数，便于在没有平台通道的单元测试里精确断言图标与按钮。
+List<MediaControl> mfMediaControls({
+  required bool playing,
+  required bool favorite,
+  required int playModeIndex,
+  required bool includeFavorites,
+  required bool includeCycleMode,
+}) {
+  final controls = <MediaControl>[
+    MediaControl.skipToPrevious,
+    if (playing) MediaControl.pause else MediaControl.play,
+    MediaControl.skipToNext,
+  ];
+  if (includeFavorites) {
+    controls.add(MediaControl.custom(
+      androidIcon: favorite
+          ? 'drawable/ic_mf_favorite_on'
+          : 'drawable/ic_mf_favorite_off',
+      label: favorite ? '取消收藏' : '收藏',
+      name: _MfAudioHandler.favoriteAction,
+    ));
+  }
+  if (includeCycleMode) {
+    controls.add(MediaControl.custom(
+      androidIcon: mfPlayModeIcon(playModeIndex),
+      label: mfPlayModeLabel(playModeIndex),
+      name: _MfAudioHandler.cycleModeAction,
+    ));
+  }
+  return controls;
 }
