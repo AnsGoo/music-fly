@@ -1,6 +1,8 @@
 /// Queue behaviour when the server refuses to hand over a track's file.
 library;
 
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:musicfly/audio/player.dart';
@@ -41,13 +43,26 @@ class _FakePlayer extends MfPlayer {
   }
 }
 
+/// Deterministic shuffle RNG: `value % max` is always returned, so a test can
+/// assert the exact row a random skip lands on.
+class _FixedRandom implements Random {
+  _FixedRandom(this.value);
+  final int value;
+  @override
+  int nextInt(int max) => value % max;
+  @override
+  double nextDouble() => 0.5;
+  @override
+  bool nextBool() => true;
+}
+
 void main() {
   List<Track> queue(int count) => [
     for (var i = 0; i < count; i++)
       Track(id: 'id$i', title: '曲目${i + 1}'),
   ];
 
-  AppModel build(_FakePlayer player) {
+  AppModel build(_FakePlayer player, {Random? random}) {
     final client = MusicFreeClient();
     client.restore(
       MusicFreeSession(
@@ -57,7 +72,7 @@ void main() {
         clientSalt: 'salt',
       ),
     );
-    return AppModel(client: client, player: player);
+    return AppModel(client: client, player: player, random: random);
   }
 
   test('steps over a broken track and keeps playing', () async {
@@ -145,6 +160,37 @@ void main() {
     // burst must not spawn four concurrent setUrl loads.
     expect(model.queueIndex, 1);
     expect(player.attempted.length, lessThanOrEqualTo(3));
+    model.dispose();
+  });
+
+  // A headset/lock-screen "next" used to walk `index + 1` no matter what the
+  // play mode was, so shuffle still played the next row in the list. It must
+  // use the same shuffle picker as the in-app next button.
+  test('ohos system next picks a random row in shuffle mode', () async {
+    final player = _FakePlayer(healthy: true);
+    // From row 0 the sequential target would be 1; the fixed RNG forces row 3.
+    final model = build(player, random: _FixedRandom(3));
+
+    await model.playFrom(queue(5), 0);
+    model.setPlayMode(PlayMode.shuffle);
+    await model.systemSkip(1);
+
+    expect(model.queueIndex, 3);
+    expect(player.attempted, ['曲目1', '曲目4']);
+    model.dispose();
+  });
+
+  test('ohos system previous picks a random row in shuffle mode', () async {
+    final player = _FakePlayer(healthy: true);
+    // From row 4 the sequential target would be 3; the fixed RNG forces row 2.
+    final model = build(player, random: _FixedRandom(2));
+
+    await model.playFrom(queue(5), 4);
+    model.setPlayMode(PlayMode.shuffle);
+    await model.systemSkip(-1);
+
+    expect(model.queueIndex, 2);
+    expect(player.attempted, ['曲目5', '曲目3']);
     model.dispose();
   });
 }

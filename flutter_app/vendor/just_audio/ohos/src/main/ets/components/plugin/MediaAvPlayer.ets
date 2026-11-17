@@ -64,6 +64,53 @@ export class MfMediaCommandForwarder {
 /// 改成全局稳定回调：命令到了再从 AppStorage 取「当前」转发器 / 活跃实例。
 export const MF_SESSION_LISTENER_KEY = 'musicflySessionCommandListeners';
 
+/// 锁屏播控中心的「循环模式 / 收藏」按钮：只有注册了对应回调按钮才亮起，
+/// 图标则由 AVPlaybackState 的 loopMode / favorite 决定。状态放 AppStorage —— 
+/// AVSession 回调与 Flutter 通道在 ArkTS 打包后可能落在不同模块记录里。
+export const MF_PLAYBACK_EXTRAS_KEY = 'musicflyPlaybackExtras';
+
+export class MfPlaybackExtras {
+  /// 与 Dart 的 PlayMode 序号一致：0=顺序 1=列表循环 2=单曲循环 3=随机。
+  playModeIndex: number = 0;
+  favorite: boolean = false;
+}
+
+export function mfPlaybackExtras(): MfPlaybackExtras {
+  let extras = AppStorage.get(MF_PLAYBACK_EXTRAS_KEY) as MfPlaybackExtras | undefined;
+  if (!extras) {
+    extras = new MfPlaybackExtras();
+    AppStorage.setOrCreate(MF_PLAYBACK_EXTRAS_KEY, extras);
+  }
+  return extras;
+}
+
+/// 与 AppModel.ohosPlayModeIndex / PlayMode 一一对应，映射到 AVSession 的
+/// 四个官方枚举值（见 @ohos.multimedia.avsession 的 LoopMode）：
+/// 0=顺序 SEQUENCE 1=列表循环 LIST 2=单曲 SINGLE 3=随机 SHUFFLE。
+function mfAvLoopMode(playModeIndex: number): avSession.LoopMode {
+  switch (playModeIndex) {
+    case 1:
+      return avSession.LoopMode.LOOP_MODE_LIST;
+    case 2:
+      return avSession.LoopMode.LOOP_MODE_SINGLE;
+    case 3:
+      return avSession.LoopMode.LOOP_MODE_SHUFFLE;
+    default:
+      return avSession.LoopMode.LOOP_MODE_SEQUENCE;
+  }
+}
+
+/// Dart 侧播放模式 / 收藏变化后主动同步，让系统面板图标立刻更新。
+export function mfApplyPlaybackExtras(playModeIndex: number, favorite: boolean): void {
+  const extras = mfPlaybackExtras();
+  extras.playModeIndex = playModeIndex;
+  extras.favorite = favorite;
+  const active = AppStorage.get(MF_ACTIVE_PLAYER_KEY) as MediaAvPlayer | undefined;
+  if (active) {
+    active.syncPlaybackState();
+  }
+}
+
 export function mfRegisterSessionCommands(session: avSession.AVSession): void {
   if (AppStorage.has(MF_SESSION_LISTENER_KEY)) {
     return;
@@ -80,6 +127,16 @@ export function mfRegisterSessionCommands(session: avSession.AVSession): void {
     });
     session.on('playPrevious', () => {
       mfDispatchPanelCommand('previous');
+    });
+    // 循环模式 / 收藏：注册后锁屏面板的这两个按钮才会亮起。回调带回的是
+    // 系统「当前」图标状态，由 AppModel 自行 cycle 后回推新状态。
+    session.on('setLoopMode', (mode: avSession.LoopMode) => {
+      console.info(TAG, `AVSession setLoopMode: ${mode}`);
+      mfDispatchPanelCommand('loopMode');
+    });
+    session.on('toggleFavorite', (assetId: string) => {
+      console.info(TAG, `AVSession toggleFavorite: ${assetId}`);
+      mfDispatchPanelCommand('favorite');
     });
     AppStorage.setOrCreate(MF_SESSION_LISTENER_KEY, true);
     console.info(TAG, 'AVSession command listeners registered');
@@ -1442,14 +1499,26 @@ export class MediaAvPlayer {
 
   private updateIsPlay(display: boolean) {
     // speed 是锁屏面板外推进度条的依据：不带 speed 视为倍速 0，进度条永远不动。
+    const extras = mfPlaybackExtras();
     this.setPlayState({
       state: display ? avSession.PlaybackState.PLAYBACK_STATE_PLAY : avSession.PlaybackState.PLAYBACK_STATE_PAUSE,
       speed: display ? this.speed : 0,
       position: {
         elapsedTime: this.getCurrentTime(),
         updateTime: new Date().getTime()
-      }
+      },
+      // 按钮图标状态：循环模式与收藏。应用内切模式 / 收藏后由 Dart 同步进来。
+      // 字段名以官方 @ohos.multimedia.avsession 的 AVPlaybackState 为准：
+      // loopMode?: LoopMode、isFavorite?: boolean（不是 favorite）。
+      loopMode: mfAvLoopMode(extras.playModeIndex),
+      isFavorite: extras.favorite,
     });
+  }
+
+  /// Dart 同步 loopMode/favorite 后立刻重推一次 AVPlaybackState，让锁屏图标
+  /// 马上反映新状态，不必等下一次播放/暂停事件。
+  public syncPlaybackState(): void {
+    this.updateIsPlay(this.isPlaying);
   }
 
   public getCurrentTime() {

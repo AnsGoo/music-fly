@@ -94,11 +94,17 @@ class MfPlayer {
   final List<StreamSubscription<dynamic>> _subs = [];
   VoidCallback? onCompleted;
 
-  /// 鸿蒙锁屏 / 媒体面板的「上一首 / 下一首」最终落到这里，由队列所有者
-  /// (AppModel) 注入。注册平台通道需要 WidgetsBinding，所以放在第一次真正
-  /// 播放时的 [_bind] 里，纯 Dart 测试构造 AppModel 不会碰到它。
+  /// 鸿蒙锁屏 / 媒体面板的「上一首 / 下一首 / 播放 / 暂停」最终落到这里，由
+  /// 队列所有者 (AppModel) 注入。播放/暂停也要由 AppModel 接管：投屏时声音在
+  /// 电视上，本地引擎是停的，直接 pause() 本地引擎不会让电视停下来。
+  /// 注册平台通道需要 WidgetsBinding，所以放在第一次真正播放时的 [_bind] 里，
+  /// 纯 Dart 测试构造 AppModel 不会碰到它。
   Future<void> Function()? onSystemNext;
   Future<void> Function()? onSystemPrevious;
+  Future<void> Function()? onSystemPlay;
+  Future<void> Function()? onSystemPause;
+  Future<void> Function()? onSystemLoopMode;
+  Future<void> Function()? onSystemFavorite;
 
   /// Fires when a track cannot be played: (trackId, human readable reason).
   /// The queue owner uses it to explain the failure and move on.
@@ -155,7 +161,16 @@ class MfPlayer {
     final onNext = onSystemNext;
     final onPrevious = onSystemPrevious;
     if (onNext != null && onPrevious != null) {
-      MfOhosMediaControl.bind(onNext: onNext, onPrevious: onPrevious);
+      MfOhosMediaControl.bind(
+        onNext: onNext,
+        onPrevious: onPrevious,
+        // 播放/暂停回退到本地引擎：没被 AppModel 接管时（纯 MfPlayer 测试、
+        // 或只用切歌的调用方）锁屏暂停至少还能停本机，不会变成死按钮。
+        onPlay: onSystemPlay ?? resume,
+        onPause: onSystemPause ?? pause,
+        onLoopMode: onSystemLoopMode,
+        onFavorite: onSystemFavorite,
+      );
     }
   }
 

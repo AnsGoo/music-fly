@@ -12,6 +12,7 @@ import 'package:dart_cast/dart_cast.dart' hide ServerInfo;
 import 'package:flutter/foundation.dart';
 
 import '../audio/media_session.dart';
+import '../audio/ohos_media_control.dart';
 import '../audio/player.dart';
 import '../data/device_did.dart';
 import '../data/fn_connect.dart';
@@ -31,6 +32,17 @@ enum Section { home, tracks, albums, artists, playlists, favorites }
 /// How the queue advances when a song ends. [sequential] is the original
 /// behaviour (play to the end and stop); the queue panel offers the rest.
 enum PlayMode { sequential, loopAll, loopOne, shuffle }
+
+/// 播放模式在鸿蒙 AVSession 里的数字约定，与 vendored just_audio 的
+/// `MediaAvPlayer.ets` 中 `mfAvLoopMode` 一一对应（0=顺序 1=列表循环
+/// 2=单曲 3=随机）。用显式映射而非 `PlayMode.index`，枚举顺序变动时不会
+/// 静默把锁屏图标错位。
+int ohosPlayModeIndex(PlayMode mode) => switch (mode) {
+  PlayMode.sequential => 0,
+  PlayMode.loopAll => 1,
+  PlayMode.loopOne => 2,
+  PlayMode.shuffle => 3,
+};
 
 extension SectionInfo on Section {
   String get label => switch (this) {
@@ -111,13 +123,15 @@ class AppModel extends ChangeNotifier {
     SessionStore? store,
     MfPlayer? player,
     @visibleForTesting SessionFactory? castSessionFactory,
+    @visibleForTesting Random? random,
   }) : client = client ?? MusicFreeClient(),
        _store = store ?? SessionStore(),
        player = player ?? MfPlayer(),
        // Named private parameters do not exist; the lint's suggestion does
        // not apply to a test-only injection.
        // ignore: prefer_initializing_formals
-       _castSessionFactory = castSessionFactory {
+       _castSessionFactory = castSessionFactory,
+       _random = random ?? Random() {
     this.player.onCompleted = _handleCompleted;
     this.player.onFailed = _handleFailure;
     this.player.state.addListener(_mirrorLocalPlayback);
@@ -140,6 +154,15 @@ class AppModel extends ChangeNotifier {
     // 通道在 MfPlayer 第一次播放时才注册（那时 WidgetsBinding 已就绪）。
     this.player.onSystemNext = () => systemSkip(1);
     this.player.onSystemPrevious = () => systemSkip(-1);
+    // 鸿蒙锁屏的播放/暂停同样要经队列所有者：投屏时声音在电视上，本地引擎
+    // 是停的，直接 pause() 本地引擎不会让电视停。用明确命令语义，不放 toggle。
+    this.player.onSystemPlay = systemPlay;
+    this.player.onSystemPause = systemPause;
+    // 锁屏「循环模式 / 收藏」按钮同样落在队列所有者：切模式用 App 内同一套
+    // cyclePlayMode，收藏针对当前曲目。两者都不是 toggle 的媒体键语义，但
+    // 系统上报的状态由 _syncSystemExtras 推送，图标始终反映真实值。
+    this.player.onSystemLoopMode = systemCyclePlayMode;
+    this.player.onSystemFavorite = systemToggleFavorite;
   }
 
   final MusicFreeClient client;
@@ -257,7 +280,7 @@ class AppModel extends ChangeNotifier {
   /// Most recently started tracks, newest first, de-duplicated by id.
   List<Track> _history = const [];
   static const _historyLimit = 100;
-  final Random _random = Random();
+  final Random _random;
 
   int _page = 0;
   int _total = 0;
@@ -1869,29 +1892,57 @@ class AppModel extends ChangeNotifier {
 
   /// Sequential is the original behaviour: the last song ends and playback
   /// stops. The looping modes wrap, shuffle picks any other row.
-  int? _nextIndex() {
+  ///
+  /// [from] lets a caller chain several steps without committing each one
+  /// (system buttons coalesce rapid taps and jump straight to the final row).
+  /// [forceWrap] is for system buttons only: they must stay responsive at the
+  /// queue edge instead of silently doing nothing.
+  int? _nextIndex({int? from, bool forceWrap = false}) {
     final length = _queue.length;
+    if (length <= 0) return null;
     if (length == 1) {
-      return _playMode == PlayMode.loopAll || _playMode == PlayMode.loopOne
+      return _playMode == PlayMode.loopAll ||
+              _playMode == PlayMode.loopOne ||
+              forceWrap
           ? 0
           : null;
     }
+    final current = from ?? _queueIndex;
     if (_playMode == PlayMode.shuffle) {
       var candidate = _random.nextInt(length);
-      if (candidate == _queueIndex) candidate = (candidate + 1) % length;
+      if (candidate == current) candidate = (candidate + 1) % length;
       return candidate;
     }
-    final target = _queueIndex + 1;
+    final target = current + 1;
     return target >= length
-        ? (_playMode == PlayMode.loopAll ? 0 : null)
+        ? (_playMode == PlayMode.loopAll || forceWrap ? 0 : null)
+        : target;
+  }
+
+  /// Mirror of [_nextIndex] for the previous button. Kept separate because
+  /// sequential/previous deliberately does not replay the last row in
+  /// single-track loop mode (only "next" does that).
+  int? _previousIndex({int? from, bool forceWrap = false}) {
+    final length = _queue.length;
+    if (length <= 0) return null;
+    if (length == 1) {
+      return _playMode == PlayMode.loopAll || forceWrap ? 0 : null;
+    }
+    final current = from ?? _queueIndex;
+    if (_playMode == PlayMode.shuffle) {
+      var candidate = _random.nextInt(length);
+      if (candidate == current) candidate = (candidate - 1 + length) % length;
+      return candidate;
+    }
+    final target = current - 1;
+    return target < 0
+        ? (_playMode == PlayMode.loopAll || forceWrap ? length - 1 : null)
         : target;
   }
 
   Future<void> previous() async {
     if (_queue.isEmpty || _queueIndex < 0) return;
-    final target = _queueIndex > 0
-        ? _queueIndex - 1
-        : (_playMode == PlayMode.loopAll ? _queue.length - 1 : null);
+    final target = _previousIndex();
     if (target == null) return;
     _queueIndex = target;
     _failedSkips = 0;
@@ -1908,10 +1959,36 @@ class AppModel extends ChangeNotifier {
     await _startTrack(_queue[index]);
   }
 
+  /// 把当前播放模式与「当前曲目是否收藏」推给鸿蒙 AVSession，决定锁屏上
+  /// 「循环 / 收藏」按钮的图标。非鸿蒙平台通道对端不存在，内部静默忽略。
+  /// 这几个入口（切模式、收藏、换歌）必须都调到，否则锁屏图标会与应用内
+  /// 状态对不上。
+  void _syncSystemExtras({Track? track}) {
+    unawaited(MfOhosMediaControl.syncState(
+      playModeIndex: ohosPlayModeIndex(_playMode),
+      favorite: (track ?? currentTrack)?.isFavorite ?? false,
+    ));
+  }
+
+  /// 锁屏「循环模式」按钮：切到下一个模式，与 App 内按钮共用同一套顺序，
+  /// 并立刻把新图标推回系统面板。
+  Future<void> systemCyclePlayMode() async {
+    cyclePlayMode();
+    _syncSystemExtras();
+  }
+
+  /// 锁屏「收藏」按钮：收藏/取消当前曲目，与 App 内收藏按钮同一逻辑。
+  /// toggleFavorite 内部已负责同步图标，这里不重复推通道。
+  Future<void> systemToggleFavorite() async {
+    final track = currentTrack;
+    if (track != null) await toggleFavorite(track);
+  }
+
   void setPlayMode(PlayMode mode) {
     if (_playMode == mode) return;
     _playMode = mode;
     notifyListeners();
+    _syncSystemExtras();
   }
 
   void cyclePlayMode() => setPlayMode(
@@ -1995,6 +2072,10 @@ class AppModel extends ChangeNotifier {
   /// - **连点合并**：重入期间累加步数，一次加载直接跳到目标曲目，避免多个
   ///   `setUrl` 并发互相打断。
   ///
+  /// 但**播放模式必须与 App 内按钮一致**：随机模式下线控下一首要随机选曲，
+  /// 不能照列表顺序 +1（实测「列表随机播放」后按耳机线控下一首仍是下一首）。
+  /// 因此这里逐步走 [_nextIndex] / [_previousIndex]，只提交最终落点。
+  ///
   /// 自动续播 [_handleCompleted] 仍走 [next]，所以播完最后一首照常停止，
   /// 不会因为这里循环而无限播放。
   Future<void> systemSkip(int delta) async {
@@ -2019,9 +2100,19 @@ class AppModel extends ChangeNotifier {
       while (_pendingSystemSteps != 0) {
         final steps = _pendingSystemSteps;
         _pendingSystemSteps = 0;
-        final length = _queue.length;
-        var target = (_queueIndex + steps) % length;
-        if (target < 0) target += length;
+        // Walk one step at a time through the play-mode-aware helpers. The old
+        // `(index + steps) % length` maths ignored playMode entirely, which is
+        // why headset/lock-screen next stayed sequential in shuffle mode.
+        // Only the final row is committed, so coalesced taps still cause a
+        // single setUrl.
+        var target = _queueIndex;
+        for (var i = 0; i < steps.abs(); i++) {
+          final step = steps > 0
+              ? _nextIndex(from: target, forceWrap: true)
+              : _previousIndex(from: target, forceWrap: true);
+          if (step == null) break;
+          target = step;
+        }
         // 步数正好是队列长度的整数倍时回到原曲：仍重启一次，保证按钮有反馈。
         _queueIndex = target;
         _failedSkips = 0;
@@ -2061,10 +2152,57 @@ class AppModel extends ChangeNotifier {
     player.toggle();
   }
 
+  /// 鸿蒙锁屏「暂停」命令：明确暂停，不做 toggle，避免连点两次反而恢复播放。
+  /// 投屏时打到电视；本机播放时停本地引擎。
+  Future<void> systemPause() async {
+    final session = _castSession;
+    if (session != null) {
+      switch (session.state) {
+        case SessionState.playing:
+        case SessionState.buffering:
+        case SessionState.loading:
+          await session.pause();
+        default:
+          break;
+      }
+      return;
+    }
+    await player.pause();
+  }
+
+  /// 鸿蒙锁屏「播放」命令：明确恢复，不做 toggle。投屏已停/未起时重新推流，
+  /// 保证按钮总有反馈；本机无曲目时从当前列表起播。
+  Future<void> systemPlay() async {
+    final session = _castSession;
+    if (session != null) {
+      switch (session.state) {
+        case SessionState.paused:
+          await session.play();
+        case SessionState.playing:
+        case SessionState.buffering:
+        case SessionState.loading:
+          break;
+        default:
+          final track = currentTrack;
+          if (track != null) await _startTrack(track);
+      }
+      return;
+    }
+    if (!player.state.value.hasTrack) {
+      final list = visibleTracks;
+      if (list.isNotEmpty) await playFrom(list, 0);
+      return;
+    }
+    await player.resume();
+  }
+
   Future<void> _startTrack(Track track) async {
     _completedGuard = false;
     _lyrics = null;
     _noteHistory(track);
+    // 换歌时同步收藏图标：同一队列里各曲收藏状态不同，不推就会停在上一首的
+    // 图标上。传 track 而非 currentTrack，避免移除队列项时的时序差异。
+    _syncSystemExtras(track: track);
     // 用户主动开播时顺手要一次通知权限（Android 13+）：没有它，暂停后锁屏
     // 和通知栏上的播放控制器会消失。放在这里而不是启动时，避免一进 App 就弹窗。
     unawaited(MfMediaSession.ensureNotificationPermission());
@@ -2257,6 +2395,10 @@ class AppModel extends ChangeNotifier {
     final target = !track.isFavorite;
     _applyFavorite(track.id, target, track);
     notifyListeners();
+    // 收藏的是当前曲目时立刻更新锁屏图标（乐观；失败下面会回滚再推一次）。
+    if (currentTrack?.id == track.id) {
+      _syncSystemExtras(track: currentTrack);
+    }
     try {
       await client.setStarred(track.id, target);
     } catch (failure) {
@@ -2264,6 +2406,9 @@ class AppModel extends ChangeNotifier {
       _applyFavorite(track.id, !target, track);
       _error = target ? '收藏失败：$failure' : '取消收藏失败：$failure';
       notifyListeners();
+      if (currentTrack?.id == track.id) {
+        _syncSystemExtras(track: currentTrack);
+      }
     }
   }
 

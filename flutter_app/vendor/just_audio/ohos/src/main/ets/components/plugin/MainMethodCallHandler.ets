@@ -28,9 +28,26 @@ import {
   MethodResult
 } from '@ohos/flutter_ohos';
 import { AudioPlayer } from './AudioPlayer'
-import { MfMediaCommandForwarder, MF_MEDIA_COMMAND_KEY, mfApplySystemMetadata } from './MediaAvPlayer'
+import { MfMediaCommandForwarder, MF_MEDIA_COMMAND_KEY, mfApplySystemMetadata,
+  mfApplyPlaybackExtras } from './MediaAvPlayer'
 
 const TAG = 'MediaAvPlayer';
+
+/// 反向通道的 Dart → 原生一半：Dart 侧播放模式 / 收藏变化后推过来，
+/// 刷新 AVSession 的按钮图标。命令转发的另一半见 registerForwarder()。
+class MfControlChannelHandler implements MethodCallHandler {
+  onMethodCall(call: MethodCall, result: MethodResult): void {
+    switch (call.method) {
+      case 'setPlaybackExtras':
+        mfApplyPlaybackExtras(call.argument('playModeIndex'), call.argument('favorite'));
+        result.success(null);
+        break;
+      default:
+        result.notImplemented();
+        break;
+    }
+  }
+}
 
 export class MainMethodCallHandler implements MethodCallHandler {
   private applicationContext: Context;
@@ -44,6 +61,7 @@ export class MainMethodCallHandler implements MethodCallHandler {
     this.applicationContext = applicationContext;
     this.messenger = messenger;
     this.controlChannel = new MethodChannel(messenger, 'com.seasonyuu.musicfly/media_control');
+    this.controlChannel.setMethodCallHandler(new MfControlChannelHandler());
     this.registerForwarder();
   }
 

@@ -213,6 +213,30 @@ void main() {
     model.dispose();
   });
 
+  test('lock-screen play / pause reach the renderer, not the local engine',
+      () async {
+    final (model, session) = await build();
+    // build() leaves the renderer playing.
+    expect(session.state, SessionState.playing);
+
+    await model.systemPause();
+    expect(session.pauses, 1);
+    // A repeated pause must not toggle back to play.
+    await model.systemPause();
+    expect(session.pauses, 2);
+    expect(session.plays, 0);
+
+    session.stateMachine.transitionTo(SessionState.paused);
+    await model.systemPlay();
+    expect(session.plays, 1);
+    // The fake play() does not move the state machine; mirror the renderer's
+    // real transition so the second command sees "already playing".
+    session.stateMachine.transitionTo(SessionState.playing);
+    await model.systemPlay();
+    expect(session.plays, 1);
+    model.dispose();
+  });
+
   test('next and previous stay on the renderer', () async {
     final (model, session) = await build();
 

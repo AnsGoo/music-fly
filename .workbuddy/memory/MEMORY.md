@@ -35,7 +35,8 @@ Flutter App 在 `flutter_app/`，后端 `~/Documents/code/music-free/backend`（
 - **FNID 地址池是内部实现，绝不暴露**：设置页只显示一条只读「当前连接」，不能增删改（`addressesManaged` 拦截）。
 - **FNID 登录无端口项，后端端口定死 14533**（`kDefaultBackendPort` 唯一来源）；普通登录仍可带任意端口。
 - **FNID 连上 NAS 后必须输入账号密码**（防网关免密登进默认账号）：`loginFnPrepared()` 要求非空凭据，网关链路走 `gateway-bind`（任何失败都 fallback 同地址 `login`，别按异常类型区分），直连/中继走普通 `login`。`gatewayLogin()` 只留给 `_reloginSilently()`。退出登录回 FNID 页签（`preferFnConnectTab`）。
-- 队列面板：`queue_sheet.dart`（当前/历史双 tab、删除+拖拽、当前项高亮、底部播放模式与「回到当前」）；入口 = 迷你条 / 桌面条 / 全屏播放器。`PlayMode {sequential, loopAll, loopOne, shuffle}` + `queueSource` + `history`。**默认仍 `sequential`**（播完停止），未确认别改列表循环；`_advance(auto:)` 只有自动续播才认单曲循环。
+- 队列面板：`queue_sheet.dart`（当前/历史双 tab、删除+拖拽、当前项高亮、底部播放模式与「回到当前」）；入口 = 迷你条 / 桌面条 / 全屏播放器。`PlayMode {sequential, loopAll, loopOne, shuffle}` + `queueSource` + `history`。**默认仍 `sequential`**（播完停止），未确认别改列表循环；`_advance(auto:)` 只有自动续播才认单曲循环。**系统级切歌（鸿蒙 AVSession / 耳机线控 → `systemSkip`）必须走 `_nextIndex`/`_previousIndex` 并传 `forceWrap: true`（保留末尾循环 + 连点合并），别自己写 index 算术**——否则 shuffle 下不会随机选曲（2026-11-17 修）。
+- **鸿蒙锁屏播控按钮**：种类与顺序由系统按会话类型固定（audio = `收藏/上一首/播放暂停/下一首/循环模式`），App **不能自定义排列顺序**，只能靠注册对应回调让按钮亮起 + 上报状态刷新图标。vendored `MediaAvPlayer.ets` 已注册 `setLoopMode`/`toggleFavorite` 转发到 `MfOhosMediaControl`；`AVPlaybackState` 字段是 `loopMode` + `isFavorite`（不是 favorite）；LoopMode 4 值 `SEQUENCE0/SINGLE1/LIST2/SHUFFLE3` 与 Dart `ohosPlayModeIndex()` 一一映射。切模式/收藏/换歌后必须 `AppModel._syncSystemExtras()` 回推，否则锁屏图标不同步。改 ArkTS 后需 DevEco 重编译安装，热重载无效。
 - **PC 队列是右侧停靠面板**：`showQueue(context, {fromFullPlayer})` 按 `kDockedQueueBreakpoint = 900` 分流；面板挂在 HomeShell 内容区 Row 右侧、止于播放条上方（放整行末尾会压窄播放条导致溢出）；播放条 <760 宽时镜像 `rightSpan` 归 0。
 - 队列底部按钮保持紧凑 chip（`_Pill` 视觉 30px、内容宽度、外层 38px 点击区；footer padding 14/8）。
 - `reorderQueue` 用旧 `onReorder` 插入索引语义（newIndex > oldIndex 时 -1），别换 `onReorderItem`。
