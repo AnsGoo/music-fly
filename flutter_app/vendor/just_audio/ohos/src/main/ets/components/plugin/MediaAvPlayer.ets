@@ -94,7 +94,7 @@ export class MfMediaCommandForwarder {
 /// 清掉，且多个实例异步 createSession 时会互相把对方刚注册的回调解绑。实测
 /// 结果是锁屏按下一首时应用侧一条 `on playNext` 都收不到，系统却显示按钮可用。
 /// 改成全局稳定回调：命令到了再从 AppStorage 取「当前」转发器 / 活跃实例。
-export const MF_SESSION_LISTENER_KEY = 'musicflySessionCommandListeners';
+/// （是否已注册按会话实例跟踪，见 mfRegisterSessionCommands。）
 
 /// 锁屏播控中心的「循环模式 / 收藏」按钮：只有注册了对应回调按钮才亮起，
 /// 图标则由 AVPlaybackState 的 loopMode / favorite 决定。状态放 AppStorage —— 
@@ -143,8 +143,12 @@ export function mfApplyPlaybackExtras(playModeIndex: number, favorite: boolean):
   }
 }
 
+let mfCommandsRegisteredOn: avSession.AVSession | undefined;
+
 export function mfRegisterSessionCommands(session: avSession.AVSession): void {
-  if (AppStorage.has(MF_SESSION_LISTENER_KEY)) {
+  // 守卫必须按会话实例判断，不能用 AppStorage 布尔标志：会话销毁重建后标志
+  // 还在，新会话就永远注册不上命令回调，锁屏按钮全部失灵。
+  if (mfCommandsRegisteredOn === session) {
     return;
   }
   try {
@@ -170,7 +174,7 @@ export function mfRegisterSessionCommands(session: avSession.AVSession): void {
       console.info(TAG, `AVSession toggleFavorite: ${assetId}`);
       mfDispatchPanelCommand('favorite');
     });
-    AppStorage.setOrCreate(MF_SESSION_LISTENER_KEY, true);
+    mfCommandsRegisteredOn = session;
     console.info(TAG, 'AVSession command listeners registered');
   } catch (error) {
     console.error(TAG, `register AVSession commands failed: ${JSON.stringify(error)}`);
@@ -208,19 +212,98 @@ export const MF_ACTIVE_PLAYER_KEY = 'musicflyActiveMediaPlayer';
 export const MF_AV_METADATA_KEY = 'musicflyAvMetadataSnapshot';
 export const MF_AV_SESSION_KEY = 'musicflySharedAvSession';
 
+/// 模块级兜底引用。AppStorage 在进程被系统冻结/解冻等场景下可能被框架清空
+/// （2026-11-18 真机：后台冻结数小时后解冻，AppStorage 里的会话缓存消失，
+/// 而旧 AVSession 仍在系统里占坑 → createAVSession 全部被拒）。模块静态与
+/// JS 堆同生命周期，只要进程不死就能拿回旧会话。
+let mfSessionPromise: Promise<avSession.AVSession> | undefined;
+let mfSessionInstance: avSession.AVSession | undefined;
+
+/// BusinessError 的属性不可枚举，JSON.stringify 只会得到 `{}`——2026-11-18
+/// 真机排障时 `createSession failed: {}` 就是这么来的，完全看不出原因。
+/// 这里显式抽取 code / message。
+export function mfSessionErrorDetail(label: string, error: Object | undefined): string {
+  const e = error as BusinessError | undefined;
+  if (e && (e.code !== undefined || e.message !== undefined)) {
+    return `${label}: code=${e.code}, message=${e.message}`;
+  }
+  return `${label}: ${JSON.stringify(error)}`;
+}
+
+function mfSleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 /// SDK 明确「An ability can only create one AVSession」。缓存创建 Promise：
 /// 热重启 / 重建 AudioPlayer 时不再重复 createAVSession，锁屏始终只有一张
 /// 卡片，元数据也只往这一处写。
 export function mfSharedSession(context: common.UIAbilityContext): Promise<avSession.AVSession> {
-  let pending = AppStorage.get(MF_AV_SESSION_KEY) as Promise<avSession.AVSession> | undefined;
-  if (!pending) {
-    pending = avSession.createAVSession(context, 'SESSION_NAME', 'audio').then((created) => {
-      created.activate();
-      return created;
-    });
-    AppStorage.setOrCreate(MF_AV_SESSION_KEY, pending);
+  const cached = (AppStorage.get(MF_AV_SESSION_KEY) as Promise<avSession.AVSession> | undefined)
+    ?? mfSessionPromise;
+  if (cached) {
+    return cached;
   }
+  const pending = mfCreateSharedSession(context);
+  AppStorage.setOrCreate(MF_AV_SESSION_KEY, pending);
+  mfSessionPromise = pending;
+  // 失败的 create 不能长期缓存：2026-11-18 真机实测，一次 createAVSession
+  // 被拒（旧会话还占着坑）后拒绝态被永久缓存，后续所有推送都拿到同一个
+  // 拒绝 → 会话永远建不回来，锁屏元数据冻死在最后一次成功写入的那首歌。
+  pending.catch(() => {
+    if ((AppStorage.get(MF_AV_SESSION_KEY) as Promise<avSession.AVSession> | undefined) === pending) {
+      AppStorage.delete(MF_AV_SESSION_KEY);
+    }
+    if (mfSessionPromise === pending) {
+      mfSessionPromise = undefined;
+    }
+  });
   return pending;
+}
+
+/// createAVSession 被拒的最常见原因是旧会话未销毁（同 ability 同 tag）。
+/// 先销毁模块级追踪的旧会话再重试；三次都失败则把拒绝抛给调用方（缓存会被
+/// mfSharedSession 的 catch 清掉，下一次推送从零再试）。
+async function mfCreateSharedSession(context: common.UIAbilityContext): Promise<avSession.AVSession> {
+  let lastError: Object | undefined;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const created = await avSession.createAVSession(context, 'SESSION_NAME', 'audio');
+      try {
+        await created.activate();
+      } catch (activateError) {
+        mfLogError(mfSessionErrorDetail('activate new session failed', activateError));
+      }
+      mfSessionInstance = created;
+      return created;
+    } catch (error) {
+      lastError = error;
+      mfLogError(mfSessionErrorDetail(`createAVSession attempt ${attempt} failed`, error));
+      if (attempt >= 3) {
+        break;
+      }
+      const stale = mfSessionInstance;
+      if (stale) {
+        try {
+          await mfAwaitWithTimeout('destroy stale session', stale.destroy());
+          mfSessionInstance = undefined;
+        } catch (destroyError) {
+          mfLogError(mfSessionErrorDetail('destroy stale session failed', destroyError));
+        }
+      }
+      await mfSleep(attempt * 500);
+    }
+  }
+  throw new Error(mfSessionErrorDetail('createAVSession retries exhausted', lastError));
+}
+
+/// 会话单例失效（销毁失败 / 重建流程放弃）时清掉所有缓存引用，下一次
+/// mfSharedSession 调用从头建。
+export function mfInvalidateSharedSession(): void {
+  mfSessionPromise = undefined;
+  mfSessionInstance = undefined;
+  AppStorage.delete(MF_AV_SESSION_KEY);
 }
 
 export class MfAvMetadata {
@@ -995,7 +1078,10 @@ export class MediaAvPlayer {
     }
     const session = this.session;
     if (!session) {
-      // 会话还在异步创建：全局快照已保存，createSession() 完成后会补写。
+      // 会话不在（尚未建好 / 建会话失败 / AppStorage 缓存被框架清空后旧会话
+      // 占坑）。快照已保存；主动尝试拿回会话——mfSharedSession 内部有缓存与
+      // 重试去重，并发调用安全。成功后 createSession 回头补写当前曲目。
+      this.createSession();
       return;
     }
     const snapshot = mfMetadata();
@@ -1064,14 +1150,14 @@ export class MediaAvPlayer {
           if (mfMetadata().revision !== revision) {
             return;
           }
-          mfLogError(`SetAVMetadata failed rev=${revision}: ${JSON.stringify(error)}`);
+          mfLogError(mfSessionErrorDetail(`SetAVMetadata failed rev=${revision}`, error));
           // 图片被系统拒绝时再退一次不带封面的版本，至少让歌名/歌手/时长
           // 出现在锁屏面板上，而不是整个 setAVMetadata 都失败。
           try {
             await mfAwaitWithTimeout('setAVMetadata fallback', session.setAVMetadata(fallback));
             mfMetadata().writeFailures = 0;
           } catch (retryError) {
-            mfLogError(`SetAVMetadata fallback failed: ${JSON.stringify(retryError)}`);
+            mfLogError(mfSessionErrorDetail('SetAVMetadata fallback failed', retryError));
             mfMetadata().writeFailures++;
             await this.recoverBrokenSession();
           }
@@ -1099,10 +1185,10 @@ export class MediaAvPlayer {
       try {
         await mfAwaitWithTimeout('destroy session', old.destroy());
       } catch (error) {
-        mfLogError(`destroy stale session failed: ${JSON.stringify(error)}`);
+        mfLogError(mfSessionErrorDetail('destroy stale session failed', error));
       }
     }
-    AppStorage.delete(MF_AV_SESSION_KEY);
+    mfInvalidateSharedSession();
     await this.createSession();
     this.setAVMetadata();
   }
@@ -1187,7 +1273,7 @@ export class MediaAvPlayer {
       // 留下多个会话 / 多个命令回调，锁屏可能一直显示最老那张卡片的歌名。
       this.session = await mfSharedSession(this.context);
     } catch (error) {
-      mfLogError(`createSession failed: ${JSON.stringify(error)}`);
+      mfLogError(mfSessionErrorDetail('createSession failed', error));
       return;
     }
     // 会话可能晚于 Dart 的第一次 setMetadata 才就绪，这里用全局快照补写一次。
