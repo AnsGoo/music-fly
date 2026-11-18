@@ -68,8 +68,23 @@ export default class MediaSource implements media.MediaSource {
   }
 
   // api 23 新增接口
-  enableOfflineCache(enable: boolean): void { 
-    this.isEnableOfflineCache = enable; 
+  enableOfflineCache(enable: boolean): void {
+    this.isEnableOfflineCache = enable;
+  }
+
+  // api 18+ 接口（MusicFly 播放器用不到音轨筛选与 DRM 取回密钥，空实现仅为满足
+  // API 26 SDK 的 media.MediaSource 接口签名，否则 hvigor 编译直接报
+  // "incorrectly implements interface"）。
+  setTrackSelectionFilter(filter: media.TrackSelectionFilter): void {
+    Log.d("MediaSource", "empty implement")
+  }
+
+  getTrackSelectionFilter(): media.TrackSelectionFilter | undefined {
+    return undefined;
+  }
+
+  setRetrieveKey(key: string): void {
+    Log.d("MediaSource", "empty implement")
   }
 
   getMimeType(): media.AVMimeTypes {

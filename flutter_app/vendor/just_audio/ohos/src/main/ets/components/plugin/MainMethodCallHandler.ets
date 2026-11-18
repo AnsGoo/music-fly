@@ -29,7 +29,7 @@ import {
 } from '@ohos/flutter_ohos';
 import { AudioPlayer } from './AudioPlayer'
 import { MfMediaCommandForwarder, MF_MEDIA_COMMAND_KEY, mfApplySystemMetadata,
-  mfApplyPlaybackExtras } from './MediaAvPlayer'
+  mfApplyPlaybackExtras, mfLogInfo } from './MediaAvPlayer'
 
 const TAG = 'MediaAvPlayer';
 
@@ -72,7 +72,7 @@ export class MainMethodCallHandler implements MethodCallHandler {
   private registerForwarder(): void {
     AppStorage.setOrCreate(MF_MEDIA_COMMAND_KEY, new MfMediaCommandForwarder(
       (command: string): boolean => {
-        console.info(TAG, `forward media control '${command}' to Dart`);
+        mfLogInfo(`forward media control '${command}' to Dart`);
         // invokeMethod 在这个 SDK 里是 void + 可选 callback，直接发即可。
         this.controlChannel.invokeMethod(command, new Map<String, Object>());
         // App 侧一定注册了 handler；返回 true 阻止原生再用只有 1 首的
@@ -80,7 +80,7 @@ export class MainMethodCallHandler implements MethodCallHandler {
         return true;
       }
     ));
-    console.info(TAG, 'media control forwarder registered');
+    mfLogInfo('media control forwarder registered');
   }
 
   onMethodCall(call: MethodCall, result: MethodResult): void {
@@ -141,7 +141,7 @@ export class MainMethodCallHandler implements MethodCallHandler {
             );
           });
         }
-        console.info(TAG, `setMetadata from Dart: title=${call.argument("title")}, artworkBytes=${artwork ? artwork.length : 0}, applied=${applied}`);
+        mfLogInfo(`setMetadata from Dart: title=${call.argument("title")}, artworkBytes=${artwork ? artwork.length : 0}, applied=${applied}`);
         result.success(new Map<String, Object>());
         break;
       }
@@ -165,7 +165,7 @@ export class MainMethodCallHandler implements MethodCallHandler {
   dispose() {
     // 不清 AppStorage：引擎热重启时新构造的 forwarder 会覆盖它，清掉反而
     // 可能让仍在运行的 AVSession 回调失去转发能力。
-    console.info(TAG, 'media control forwarder disposed');
+    mfLogInfo('media control forwarder disposed');
     this.players.forEach(player => {
       player.dispose();
     });

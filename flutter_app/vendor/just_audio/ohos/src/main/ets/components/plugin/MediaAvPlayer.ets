@@ -21,15 +21,47 @@
  * */
 
 import { media } from '@kit.MediaKit';
+import { audio } from '@kit.AudioKit';
 import { common, wantAgent } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AVCastPickerState, avSession } from '@kit.AVSessionKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import MediaSource from './MediaSource';
 import { fileIo } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
 import { Log, MethodResult } from '@ohos/flutter_ohos';
 
 const TAG = 'MediaAvPlayer';
+
+/// 元数据写超时。AVSession IPC 偶发「永不返回」：2026-11-17 真机实测一次
+/// setAVMetadata（或其后的 activate）挂死后，writeChain 被永久堵住，此后任何
+/// 切歌的元数据推送都排队在永不结束的闭包后面——锁屏从此冻结在上一首
+/// （App 内播放 A/C/E/F，锁屏一直是 B）。每次系统调用都必须限时，超时按失败
+/// 处理，让串行链继续流动。
+const METADATA_WRITE_TIMEOUT_MS = 3000;
+
+function mfAwaitWithTimeout<T>(label: string, p: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${METADATA_WRITE_TIMEOUT_MS}ms`));
+    }, METADATA_WRITE_TIMEOUT_MS);
+    p.then(
+      (value: T) => { clearTimeout(timer); resolve(value); },
+      (error: object) => { clearTimeout(timer); reject(error); }
+    );
+  });
+}
+
+/// console.* 在 release 构建里会被整体剥离（2026-11-17 排障时整条元数据链路
+/// 零日志，只能靠 hidumper 反推）。锁屏链路的日志必须走 hilog API，release
+/// 下仍然可见。
+export function mfLogInfo(message: string): void {
+  hilog.info(0x0000, TAG, '%{public}s', message);
+}
+
+export function mfLogError(message: string): void {
+  hilog.error(0x0000, TAG, '%{public}s', message);
+}
 
 /// 系统媒体面板（锁屏 / 耳机 / 蓝牙）的「上一首 / 下一首」必须交给 Dart 队列。
 /// MusicFly 每次只把一首歌 setUrl 给插件，插件内部的 songList 恒为 1 首：
@@ -209,6 +241,9 @@ export class MfAvMetadata {
   /// 串行化 AVSession.setAVMetadata：异步回调（尤其失败后的 fallback）不能
   /// 把上一首的歌名写回到新歌上。
   writeChain: Promise<void> = Promise.resolve();
+  /// 连续写入失败（超时 / 拒绝）计数。成功一次即清零；达到阈值触发会话
+  /// 销毁重建自愈（见 recoverBrokenSession）。
+  writeFailures: number = 0;
 }
 
 export function mfMetadata(): MfAvMetadata {
@@ -721,6 +756,59 @@ export class MediaAvPlayer {
     }
   }
 
+  /// 用户最近一次 play/pause 表达的意图（恢复播放的唯一依据）。被打断期间
+  /// 用户若在锁屏/App 内手动点了播放，这里也会变 true，焦点归还后自动续播。
+  private wantPlaying: boolean = false;
+  /// 中断时经锁屏命令通道让 Dart 暂停，那次 pause 会绕回原生 pause()——
+  /// 置位此标记把它和「用户手动暂停」区分开，不能清掉 wantPlaying。
+  private expectingForcedPause: boolean = false;
+  /// 音频焦点当前是否被别的应用占用（微信视频、通话等）。
+  private interrupted: boolean = false;
+
+  /// 音频焦点中断（微信视频 / 通话抢焦点）：系统会把 AVPlayer 自动暂停并只
+  /// 发 audioInterrupt 事件，而 just_audio 的 Dart 侧不接收原生播放事件——
+  /// playing 状态永远停在「播放中」，App 显示播放中却没声音，手动暂停又因
+  /// 原生已暂停而拿不到 result 回应、Dart 状态机卡死（2026-11-17 真机实测）。
+  /// 处理：暂停方向把意图经锁屏命令通道转给 Dart（AppModel.systemPause），
+  /// 让 Dart 状态 / AVSession / 锁屏面板三处同时落到暂停态；INTERRUPT_END
+  /// 的 RESUME 提示到达时按 wantPlaying 自动恢复（同样走 Dart 单一状态源）。
+  private audioInterruptCall: (event: audio.InterruptEvent) => void = (event: audio.InterruptEvent) => {
+    const active = AppStorage.get(MF_ACTIVE_PLAYER_KEY) as MediaAvPlayer | undefined;
+    if (active !== undefined && active !== this) {
+      return;
+    }
+    mfLogInfo(`audioInterrupt: type=${event.eventType}, hint=${event.hintType}, wantPlaying=${this.wantPlaying}`);
+    if (event.eventType === audio.InterruptType.INTERRUPT_TYPE_BEGIN) {
+      if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_PAUSE ||
+        event.hintType === audio.InterruptHint.INTERRUPT_HINT_STOP) {
+        this.interrupted = true;
+        if (this.isPlaying) {
+          this.isPlaying = false;
+          // 部分系统版本只发事件不自动暂停，显式补一刀（已暂停则 no-op）。
+          // 直接调 avPlayer，绕过 pause() 的意图标记逻辑。
+          this.avPlayer?.pause().catch((e: BusinessError) => {
+            mfLogError(`audioInterrupt pause failed: ${e.message}`);
+          });
+          this.updateIsPlay(false);
+          this.expectingForcedPause = true;
+          if (!this.forwardSystemCommand('pause')) {
+            this.expectingForcedPause = false;
+            mfLogError('audioInterrupt: forwarder missing, Dart state stays playing');
+          }
+        }
+      }
+      // DUCK / UNDUCK 只调音量，播放继续，不通知 Dart。
+    } else if (event.eventType === audio.InterruptType.INTERRUPT_TYPE_END) {
+      this.interrupted = false;
+      if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_RESUME && this.wantPlaying) {
+        if (!this.forwardSystemCommand('play')) {
+          mfLogError('audioInterrupt RESUME: forwarder missing, resume natively');
+          this.play();
+        }
+      }
+    }
+  };
+
   /**
    * 为服务设置回调监听
    * */
@@ -737,6 +825,8 @@ export class MediaAvPlayer {
     this.avPlayer.on('bufferingUpdate', this.bufferingUpdate);
 
     this.avPlayer.on('stateChange', this.stateCall);
+
+    this.avPlayer.on('audioInterrupt', this.audioInterruptCall);
 
   }
 
@@ -823,6 +913,7 @@ export class MediaAvPlayer {
       // 回可能取不到的 artUri。
       this.releaseArtwork();
     }
+    mfLogInfo(`setSessionMetadata: title=${nextTitle}, artist=${nextArtist}, assetId=${assetId}, artworkBytes=${artwork ? artwork.length : 0}`);
     // 会话尚未就绪也要走一遍：全局快照已更新，createSession 完成后会补写。
     this.setAVMetadata();
   }
@@ -891,7 +982,7 @@ export class MediaAvPlayer {
       snapshot.revision++;
       this.setAVMetadata();
     } catch (error) {
-      console.error(TAG, `decode artwork failed: ${JSON.stringify(error)}`);
+      mfLogError(`decode artwork failed: ${JSON.stringify(error)}`);
     }
   }
 
@@ -930,7 +1021,7 @@ export class MediaAvPlayer {
       // 换曲才变。以前每次推送都用 mf-${revision}，系统在锁屏卡片上可能一直
       // 绑定第一次创建的那个媒体项，后面写进去的新歌名根本不显示。
       const assetId = snapshot.assetId.length > 0 ? snapshot.assetId : `mf-${title}|${artist}`;
-      console.info(TAG,
+      mfLogInfo(
         `setAVMetadata: rev=${revision}, final=${title}, assetId=${assetId}, hasArtwork=${artwork !== undefined}`);
       let metadata: avSession.AVMetadata = {
         assetId: assetId,
@@ -947,13 +1038,16 @@ export class MediaAvPlayer {
         duration: duration
       };
       // 全局串行：异步写入和失败后的 fallback 都不能乱序覆盖更新的曲目。
+      // 链上每个 await 都必须限时：一次挂死的系统调用会把整条链永久堵住
+      // （2026-11-17 真机：锁屏冻结在上一首，之后所有切歌推送全部失效）。
       snapshot.writeChain = snapshot.writeChain.then(async () => {
         if (mfMetadata().revision !== revision) {
           return;
         }
         try {
-          await session.setAVMetadata(metadata);
-          console.info(TAG, `SetAVMetadata successfully rev=${revision}`);
+          await mfAwaitWithTimeout('setAVMetadata', session.setAVMetadata(metadata));
+          mfMetadata().writeFailures = 0;
+          mfLogInfo(`SetAVMetadata successfully rev=${revision}`);
           // 只写元数据时，系统面板（尤其锁屏 / 息屏后）可能仍渲染旧卡片：
           // 会话被系统降级后会静默接受 setAVMetadata，但 UI 不刷新。重新
           // activate 即可让它成为前台会话。播放状态不要在这里补推 —— 切歌
@@ -961,27 +1055,56 @@ export class MediaAvPlayer {
           // 被 native 判 401「state not valid」，反而让卡片短暂停在旧歌；
           // stateCall/play/pause/seek 本来就会在真正开始播放时上报。
           try {
-            await session.activate();
+            await mfAwaitWithTimeout('activate', session.activate());
           } catch (stateError) {
-            console.error(TAG, `refresh panel state failed: ${JSON.stringify(stateError)}`);
+            // activate 失败不影响元数据已写入，卡片内容是对的。
+            mfLogError(`refresh panel state failed: ${JSON.stringify(stateError)}`);
           }
         } catch (error) {
           if (mfMetadata().revision !== revision) {
             return;
           }
-          console.error(TAG, `SetAVMetadata failed rev=${revision}: ${JSON.stringify(error)}`);
+          mfLogError(`SetAVMetadata failed rev=${revision}: ${JSON.stringify(error)}`);
           // 图片被系统拒绝时再退一次不带封面的版本，至少让歌名/歌手/时长
           // 出现在锁屏面板上，而不是整个 setAVMetadata 都失败。
           try {
-            await session.setAVMetadata(fallback);
+            await mfAwaitWithTimeout('setAVMetadata fallback', session.setAVMetadata(fallback));
+            mfMetadata().writeFailures = 0;
           } catch (retryError) {
-            console.error(TAG, `SetAVMetadata fallback failed: ${JSON.stringify(retryError)}`);
+            mfLogError(`SetAVMetadata fallback failed: ${JSON.stringify(retryError)}`);
+            mfMetadata().writeFailures++;
+            await this.recoverBrokenSession();
           }
         }
       });
     } catch (error) {
-      console.error(TAG, `setAVMetadata prepare failed: ${JSON.stringify(error)}`);
+      mfLogError(`setAVMetadata prepare failed: ${JSON.stringify(error)}`);
     }
+  }
+
+  /// 会话写入连续失败（超时挂起或直接拒绝）时的自愈：销毁旧代理、清掉全局
+  /// 缓存的 createAVSession Promise、重新建会话并补写当前曲目。系统限制一个
+  /// ability 只能有一个 AVSession，旧代理 destroy 失败时重建会失败——那也比
+  /// 把写入链永久堵死强，下一次推送还会再试。
+  private async recoverBrokenSession(): Promise<void> {
+    const snapshot = mfMetadata();
+    if (snapshot.writeFailures < 3) {
+      return;
+    }
+    snapshot.writeFailures = 0;
+    mfLogError('AVSession writes keep failing, rebuilding session');
+    const old = this.session;
+    this.session = undefined;
+    if (old) {
+      try {
+        await mfAwaitWithTimeout('destroy session', old.destroy());
+      } catch (error) {
+        mfLogError(`destroy stale session failed: ${JSON.stringify(error)}`);
+      }
+    }
+    AppStorage.delete(MF_AV_SESSION_KEY);
+    await this.createSession();
+    this.setAVMetadata();
   }
 
   public getDuration() {
@@ -1064,7 +1187,7 @@ export class MediaAvPlayer {
       // 留下多个会话 / 多个命令回调，锁屏可能一直显示最老那张卡片的歌名。
       this.session = await mfSharedSession(this.context);
     } catch (error) {
-      console.error(TAG, `createSession failed: ${JSON.stringify(error)}`);
+      mfLogError(`createSession failed: ${JSON.stringify(error)}`);
       return;
     }
     // 会话可能晚于 Dart 的第一次 setMetadata 才就绪，这里用全局快照补写一次。
@@ -1092,6 +1215,7 @@ export class MediaAvPlayer {
    * Play music.
    */
   public async play(result?: MethodResult) {
+    this.wantPlaying = true;
     this.isPlaying = true;
     if (!this.isPrepared) {
       this.start(0);
@@ -1101,9 +1225,14 @@ export class MediaAvPlayer {
         this.state = AudioPlayerState.PLAY;
         result?.success(new Map<String, Object>());
       }).catch((e: BusinessError) => {
+        // 被打断（微信视频等抢焦点）时 play 会失败：回退乐观标记并如实上报
+        // 锁屏，等 INTERRUPT_END 的 RESUME 提示再自动恢复。之前这里只回错误，
+        // isPlaying 停留在 true，锁屏一直显示播放中。
+        this.isPlaying = false;
+        this.updateIsPlay(false);
         result?.error(e.code.toString(), e.message, e.data);
-        console.error(TAG, "play::error:" + e.message);
-      })
+        mfLogError(`play::error: ${e.message}`);
+      });
     }
   }
 
@@ -1111,17 +1240,24 @@ export class MediaAvPlayer {
    * Pause music.
    */
   public pause(result?: MethodResult) {
+    if (this.expectingForcedPause) {
+      // 音频焦点中断触发的强制暂停：不改用户意图，RESUME 后还要自动续播。
+      this.expectingForcedPause = false;
+    } else {
+      this.wantPlaying = false;
+    }
     if (this.isPlaying && this.avPlayer) {
       this.isPlaying = false;
       this.avPlayer.pause().then(() => {
         this.state = AudioPlayerState.PAUSE;
         this.updateIsPlay(false);
-        result?.success(new Map<String, Object>());
       }).catch((e: BusinessError) => {
-        result?.error(e.code.toString(), e.message, e.data)
-        console.error(TAG, "pause::error" + e.message);
+        mfLogError(`pause::error: ${e.message}`);
       });
     }
+    // 无论是否真的暂停了都要回应：原生已暂停（被打断）时跳过 avPlayer.pause()
+    // 的话，旧实现不回 result，Dart 侧 pause future 永远挂起、状态机卡死。
+    result?.success(new Map<String, Object>());
   }
 
   /**

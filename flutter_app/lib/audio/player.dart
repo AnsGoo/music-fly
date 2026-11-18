@@ -391,10 +391,14 @@ class MfPlayer {
       // 第一次调用兼作能力探测：其它平台没有这个 handler，直接抛
       // MissingPluginException，后面就没必要下载封面了。
       await _justAudioMain.invokeMethod('setMetadata', payload);
-    } catch (_) {
+    } on MissingPluginException {
       // 平台不支持：Android/iOS 走各自的 media_session/notification 通道。
       _systemPayload = null;
       return;
+    } catch (_) {
+      // 其它失败（通道临时繁忙等）不是「平台不支持」：保留 payload，让播放
+      // 开始后的确认补推（_repushSystemMetadata）还能重试。之前在这里把
+      // payload 一律清空，一次瞬时失败就让这首歌的元数据彻底丢失。
     }
     // 能走到这里就说明对端是鸿蒙的 vendored 插件（唯一实现 setMetadata 的
     // 平台）；不用再靠 Platform.operatingSystem 字符串判断，少一处版本差异。
@@ -482,7 +486,18 @@ class MfPlayer {
 
   Future<void> resume() async {
     if (!state.value.hasTrack) return;
-    await _engine?.play();
+    try {
+      await _engine?.play();
+    } on PlayerException catch (error) {
+      // 被音频焦点打断（微信视频等）期间 play 可能被系统拒绝：保持暂停态，
+      // 原生在收到 INTERRUPT_END 的 RESUME 提示后会按播放意图自动续播。
+      // 不把异常往上抛——锁屏命令通道里的调用方没有兜底，会炸成一串未处理
+      // 异常；真损坏的文件由 onFailed/onCompleted 链路另行报告。
+      assert(() {
+        debugPrint('[MusicFly] resume failed: $error');
+        return true;
+      }());
+    }
   }
 
   Future<void> seek(Duration position) async {
