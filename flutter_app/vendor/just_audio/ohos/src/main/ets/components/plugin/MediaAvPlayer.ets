@@ -45,6 +45,13 @@ function mfAwaitWithTimeout<T>(label: string, p: Promise<T>): Promise<T> {
     const timer = setTimeout(() => {
       reject(new Error(`${label} timed out after ${METADATA_WRITE_TIMEOUT_MS}ms`));
     }, METADATA_WRITE_TIMEOUT_MS);
+    if (!(p instanceof Promise)) {
+      // 防御：系统 API 在对象已失效时可能返回 undefined（如对已销毁会话再
+      // destroy），对非 Promise 调 .then 会抛运行时错，这里转成明确错误。
+      clearTimeout(timer);
+      reject(new Error(`${label}: native call did not return a Promise`));
+      return;
+    }
     p.then(
       (value: T) => { clearTimeout(timer); resolve(value); },
       (error: object) => { clearTimeout(timer); reject(error); }
@@ -210,12 +217,15 @@ export function mfDispatchPanelCommand(command: string): void {
 /// 到同一份状态，新会话创建后也能直接读到当前曲目。
 export const MF_ACTIVE_PLAYER_KEY = 'musicflyActiveMediaPlayer';
 export const MF_AV_METADATA_KEY = 'musicflyAvMetadataSnapshot';
-export const MF_AV_SESSION_KEY = 'musicflySharedAvSession';
 
-/// 模块级兜底引用。AppStorage 在进程被系统冻结/解冻等场景下可能被框架清空
-/// （2026-11-18 真机：后台冻结数小时后解冻，AppStorage 里的会话缓存消失，
-/// 而旧 AVSession 仍在系统里占坑 → createAVSession 全部被拒）。模块静态与
-/// JS 堆同生命周期，只要进程不死就能拿回旧会话。
+/// 会话单例的模块级引用。**禁止把 Promise / AVSession 存进 AppStorage**：
+/// AppStorage 是 ArkUI 可观察存储，对象存入后取回会被观测包装，不再是原生
+/// 实例——2026-11-19 真机实测：进程启动后首个实例直接用 create 返回的
+/// pending，全天元数据写入正常；第二次实例化时从 AppStorage 命中「缓存」，
+/// await 抛 `Then: thisValue is not promise!`，createSession 从此全灭，锁屏
+/// 元数据冻死。Promise 只放模块级静态：本文件内所有读写都在同一模块记录里
+/// （不涉及 EntryAbility / MainMethodCallHandler 跨模块读取），静态安全；
+/// JS 堆与进程同生命周期，后台冻结/解冻后依然能拿回旧会话。
 let mfSessionPromise: Promise<avSession.AVSession> | undefined;
 let mfSessionInstance: avSession.AVSession | undefined;
 
@@ -240,21 +250,21 @@ function mfSleep(ms: number): Promise<void> {
 /// 热重启 / 重建 AudioPlayer 时不再重复 createAVSession，锁屏始终只有一张
 /// 卡片，元数据也只往这一处写。
 export function mfSharedSession(context: common.UIAbilityContext): Promise<avSession.AVSession> {
-  const cached = (AppStorage.get(MF_AV_SESSION_KEY) as Promise<avSession.AVSession> | undefined)
-    ?? mfSessionPromise;
-  if (cached) {
+  const cached = mfSessionPromise;
+  if (cached instanceof Promise) {
     return cached;
   }
+  if (cached !== undefined) {
+    // 变质的缓存（防御性丢弃，正常不会发生）：不信任非原生 Promise。
+    mfLogError('shared session cache is not a native Promise, discarding');
+    mfSessionPromise = undefined;
+  }
   const pending = mfCreateSharedSession(context);
-  AppStorage.setOrCreate(MF_AV_SESSION_KEY, pending);
   mfSessionPromise = pending;
   // 失败的 create 不能长期缓存：2026-11-18 真机实测，一次 createAVSession
   // 被拒（旧会话还占着坑）后拒绝态被永久缓存，后续所有推送都拿到同一个
   // 拒绝 → 会话永远建不回来，锁屏元数据冻死在最后一次成功写入的那首歌。
   pending.catch(() => {
-    if ((AppStorage.get(MF_AV_SESSION_KEY) as Promise<avSession.AVSession> | undefined) === pending) {
-      AppStorage.delete(MF_AV_SESSION_KEY);
-    }
     if (mfSessionPromise === pending) {
       mfSessionPromise = undefined;
     }
@@ -303,7 +313,6 @@ async function mfCreateSharedSession(context: common.UIAbilityContext): Promise<
 export function mfInvalidateSharedSession(): void {
   mfSessionPromise = undefined;
   mfSessionInstance = undefined;
-  AppStorage.delete(MF_AV_SESSION_KEY);
 }
 
 export class MfAvMetadata {
